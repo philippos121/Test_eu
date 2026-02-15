@@ -141,10 +141,19 @@ ALLOWED_CASE_FIELDS = {
 ALLOWED_STATUS_VALUES = {s.value for s in CaseStatus}
 
 
+BOOLEAN_CASE_FIELDS = {"is_cross_border", "request_oral_hearing", "request_enforcement_certificate"}
+
+
 def _apply_case_updates(case: Case, updates: dict):
     """Apply validated updates from LLM extraction to case."""
     for key, value in updates.items():
         if key == "status" and value in ALLOWED_STATUS_VALUES:
             case.status = CaseStatus(value)
         elif key in ALLOWED_CASE_FIELDS:
+            # Coerce types to match DB column expectations
+            if key in BOOLEAN_CASE_FIELDS:
+                value = bool(value)
+            elif isinstance(value, bool):
+                # Text column got a bool from LLM — convert
+                value = None if not value else str(value)
             setattr(case, key, value)

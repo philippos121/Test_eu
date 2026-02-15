@@ -106,7 +106,7 @@
                   <span class="doc-date text-secondary">{{ formatDate(doc.created_at) }}</span>
                 </div>
                 <a
-                  :href="`/api/cases/${caseStore.currentCase.id}/documents/${doc.id}/download`"
+                  :href="caseStore.getDownloadUrl(caseStore.currentCase.id, doc.id)"
                   class="btn btn-sm btn-outline"
                   target="_blank"
                 >

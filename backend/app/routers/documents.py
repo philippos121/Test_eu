@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..auth import get_current_user
+from ..auth import get_current_user, get_current_user_from_token_or_query
 from ..database import get_db
 from ..models import Case, CaseStatus, ChatMessage, Document, MessageRole, User
 from ..schemas import DocumentRead
@@ -88,7 +88,7 @@ async def generate_form(
 async def download_document(
     case_id: UUID,
     doc_id: UUID,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_from_token_or_query),
     db: AsyncSession = Depends(get_db),
 ):
     # Verify case ownership

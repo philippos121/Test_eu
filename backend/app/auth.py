@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta
+from typing import Optional
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -54,3 +55,22 @@ async def get_current_user(
     if user is None:
         raise credentials_exception
     return user
+
+
+async def get_current_user_from_token_or_query(
+    request: Request,
+    token: Optional[str] = Query(None, alias="token"),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Accept JWT from Authorization header OR ?token= query param (for file downloads)."""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        jwt_token = auth_header.removeprefix("Bearer ").strip()
+    elif token:
+        jwt_token = token
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Ungültige Anmeldeinformationen",
+        )
+    return await get_current_user(token=jwt_token, db=db)
