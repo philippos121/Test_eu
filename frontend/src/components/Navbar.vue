@@ -2,7 +2,7 @@
   <header class="navbar">
     <div class="navbar-inner container">
       <router-link to="/" class="navbar-brand">
-        <span class="brand-icon">&#9878;</span>
+        <img src="/images/logo.jpg" alt="AI:ssociate" class="brand-logo" />
         <span class="brand-text">EU-Bagatellverfahren</span>
       </router-link>
 
@@ -61,8 +61,11 @@ function handleLogout() {
   text-decoration: none;
 }
 
-.brand-icon {
-  font-size: 1.5rem;
+.brand-logo {
+  height: 32px;
+  width: auto;
+  object-fit: contain;
+  filter: brightness(0) invert(1);
 }
 
 .navbar-links {

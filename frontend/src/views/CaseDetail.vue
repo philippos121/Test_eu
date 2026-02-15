@@ -133,7 +133,8 @@
                 :class="['message', `message-${msg.role}`]"
               >
                 <div class="message-avatar">
-                  {{ msg.role === 'user' ? '&#128100;' : '&#9878;' }}
+                  <template v-if="msg.role === 'user'">&#128100;</template>
+                  <img v-else src="/images/logo.jpg" alt="AI" class="avatar-logo" />
                 </div>
                 <div class="message-body">
                   <div class="message-meta">
@@ -147,7 +148,7 @@
               </div>
 
               <div v-if="caseStore.loading" class="message message-assistant">
-                <div class="message-avatar">&#9878;</div>
+                <div class="message-avatar"><img src="/images/logo.jpg" alt="AI" class="avatar-logo" /></div>
                 <div class="message-body">
                   <div class="message-meta">
                     <span class="message-sender">KI-Assistent</span>
@@ -514,6 +515,14 @@ function probabilityClass(p) {
   background: var(--primary);
   color: white;
   font-size: 0.9rem;
+}
+
+.avatar-logo {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  filter: brightness(0) invert(1);
+  border-radius: 0;
 }
 
 .message-body {

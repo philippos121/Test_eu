@@ -2,7 +2,7 @@
   <div class="auth-page">
     <div class="auth-container fade-in">
       <div class="auth-header">
-        <div class="auth-logo">&#9878;</div>
+        <img src="/images/logo.jpg" alt="AI:ssociate" class="auth-logo" />
         <h1>EU-Bagatellverfahren Portal</h1>
         <p class="text-secondary">Konto erstellen</p>
       </div>
@@ -142,7 +142,10 @@ async function handleRegister() {
 }
 
 .auth-logo {
-  font-size: 3rem;
+  height: 48px;
+  width: auto;
+  object-fit: contain;
+  filter: brightness(0) invert(1);
   margin-bottom: 12px;
 }
 
