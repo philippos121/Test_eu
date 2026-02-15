@@ -143,10 +143,12 @@ async function handleRegister() {
 }
 
 .auth-logo {
-  height: 48px;
+  height: 44px;
   width: auto;
   object-fit: contain;
-  border-radius: 6px;
+  background: white;
+  padding: 6px 14px;
+  border-radius: 8px;
   margin-bottom: 12px;
 }
 

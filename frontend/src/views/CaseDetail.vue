@@ -519,9 +519,11 @@ function probabilityClass(p) {
 }
 
 .avatar-logo {
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   object-fit: contain;
+  background: white;
+  padding: 2px 4px;
   border-radius: 4px;
 }
 

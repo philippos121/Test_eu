@@ -63,10 +63,12 @@ function handleLogout() {
 }
 
 .brand-logo {
-  height: 32px;
+  height: 28px;
   width: auto;
   object-fit: contain;
-  border-radius: 4px;
+  background: white;
+  padding: 4px 8px;
+  border-radius: 6px;
 }
 
 .navbar-links {
