@@ -80,20 +80,39 @@ class CaseUpdate(BaseModel):
     claimant_domicile_country: Optional[str] = None
     defendant_domicile_country: Optional[str] = None
     court_member_state: Optional[str] = None
+    # Section 6: Bank
+    bank_fee_payment_method: Optional[str] = None
+    bank_account_holder: Optional[str] = None
+    bank_name_bic: Optional[str] = None
+    bank_iban: Optional[str] = None
     # Section 7: Claim
     claim_amount: Optional[float] = None
     claim_currency: Optional[str] = None
     claim_non_monetary: Optional[str] = None
+    claim_non_monetary_value: Optional[float] = None
+    claim_non_monetary_currency: Optional[str] = None
+    claim_request_costs: Optional[bool] = None
     claim_costs: Optional[str] = None
     claim_interest_rate: Optional[float] = None
     claim_interest_from_date: Optional[str] = None
+    claim_interest_to_date: Optional[str] = None
     claim_interest_type: Optional[str] = None
+    claim_interest_on_costs: Optional[bool] = None
     # Section 8: Details
     claim_description: Optional[str] = None
     claim_basis: Optional[str] = None
     claim_evidence: Optional[str] = None
     # Section 9: Oral hearing
     request_oral_hearing: Optional[bool] = None
+    oral_hearing_reasons: Optional[str] = None
+    request_personal_attendance: Optional[bool] = None
+    personal_attendance_reasons: Optional[str] = None
+    # Section 10: Electronic service
+    consent_electronic_service: Optional[bool] = None
+    consent_electronic_communication: Optional[bool] = None
+    # Section 11: Certificate
+    request_enforcement_certificate: Optional[bool] = None
+    certificate_language: Optional[str] = None
     # Section 12: Additional info
     additional_information: Optional[str] = None
 
@@ -142,23 +161,38 @@ class CaseRead(BaseModel):
     is_cross_border: Optional[bool] = None
     # Section 6
     bank_fee_payment_method: Optional[str] = None
+    bank_account_holder: Optional[str] = None
+    bank_name_bic: Optional[str] = None
+    bank_iban: Optional[str] = None
     bank_account_details: Optional[str] = None
     # Section 7
     claim_amount: Optional[float] = None
     claim_currency: Optional[str] = None
     claim_non_monetary: Optional[str] = None
+    claim_non_monetary_value: Optional[float] = None
+    claim_non_monetary_currency: Optional[str] = None
+    claim_request_costs: Optional[bool] = None
     claim_costs: Optional[str] = None
     claim_interest_rate: Optional[float] = None
     claim_interest_from_date: Optional[str] = None
+    claim_interest_to_date: Optional[str] = None
     claim_interest_type: Optional[str] = None
+    claim_interest_on_costs: Optional[bool] = None
     # Section 8
     claim_description: Optional[str] = None
     claim_basis: Optional[str] = None
     claim_evidence: Optional[str] = None
     # Section 9
     request_oral_hearing: Optional[bool] = None
+    oral_hearing_reasons: Optional[str] = None
+    request_personal_attendance: Optional[bool] = None
+    personal_attendance_reasons: Optional[str] = None
     # Section 10
+    consent_electronic_service: Optional[bool] = None
+    consent_electronic_communication: Optional[bool] = None
+    # Section 11
     request_enforcement_certificate: Optional[bool] = None
+    certificate_language: Optional[str] = None
     # Section 12
     additional_information: Optional[str] = None
     # Assessment

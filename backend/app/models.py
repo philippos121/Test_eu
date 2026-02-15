@@ -109,16 +109,24 @@ class Case(Base):
 
     # --- Form A Section 6: Bank details (optional) ---
     bank_fee_payment_method = Column(Text)  # 6.1 How to pay court fees
-    bank_account_details = Column(Text)  # 6.2 How to receive payment from defendant
+    bank_account_holder = Column(String(256))  # 6.2.1 Kontoinhaber
+    bank_name_bic = Column(Text)  # 6.2.2 Name der Bank, BIC
+    bank_iban = Column(String(64))  # 6.2.3 Kontonummer/IBAN
+    bank_account_details = Column(Text)  # 6.2 legacy / free text fallback
 
     # --- Form A Section 7: Claim ---
     claim_amount = Column(Float)  # 7.1 Monetary claim
     claim_currency = Column(String(3), default="EUR")
     claim_non_monetary = Column(Text)  # 7.2 Non-monetary claim description
-    claim_costs = Column(Text)  # 7.3 Other costs claimed
+    claim_non_monetary_value = Column(Float)  # 7.2.2 Estimated value
+    claim_non_monetary_currency = Column(String(3))  # 7.2.2 Currency
+    claim_request_costs = Column(Boolean, default=False)  # 7.3 Request cost reimbursement
+    claim_costs = Column(Text)  # 7.3.3 Cost details
     claim_interest_rate = Column(Float)  # Interest rate
     claim_interest_from_date = Column(String(32))  # Date from which interest is claimed
+    claim_interest_to_date = Column(String(32))  # Date to which interest is claimed
     claim_interest_type = Column(String(32))  # "contractual" or "statutory"
+    claim_interest_on_costs = Column(Boolean, default=False)  # 7.5
 
     # --- Form A Section 8: Details of claim ---
     claim_description = Column(Text)  # 8.1 Substance of claim
@@ -127,9 +135,17 @@ class Case(Base):
 
     # --- Form A Section 9: Oral hearing ---
     request_oral_hearing = Column(Boolean, default=False)
+    oral_hearing_reasons = Column(Text)  # 9.1 reasons
+    request_personal_attendance = Column(Boolean, default=False)  # 9.2
+    personal_attendance_reasons = Column(Text)  # 9.2 reasons
 
-    # --- Form A Section 10: Certificate for enforcement (Form D) ---
-    request_enforcement_certificate = Column(Boolean, default=True)
+    # --- Form A Section 10: Electronic service ---
+    consent_electronic_service = Column(Boolean, default=False)  # 10.1
+    consent_electronic_communication = Column(Boolean, default=False)  # 10.2
+
+    # --- Form A Section 11: Certificate for enforcement ---
+    request_enforcement_certificate = Column(Boolean, default=True)  # 11.1
+    certificate_language = Column(String(32))  # 11.2 language for certificate
 
     # --- Form A Section 12: Additional information ---
     additional_information = Column(Text)

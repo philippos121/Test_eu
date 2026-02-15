@@ -122,16 +122,23 @@ ALLOWED_CASE_FIELDS = {
     "claimant_domicile_country", "defendant_domicile_country", "court_member_state",
     "is_cross_border",
     # Section 6: Bank
-    "bank_fee_payment_method", "bank_account_details",
+    "bank_fee_payment_method", "bank_account_holder", "bank_name_bic",
+    "bank_iban", "bank_account_details",
     # Section 7: Claim
-    "claim_amount", "claim_currency", "claim_non_monetary", "claim_costs",
-    "claim_interest_rate", "claim_interest_from_date", "claim_interest_type",
+    "claim_amount", "claim_currency", "claim_non_monetary",
+    "claim_non_monetary_value", "claim_non_monetary_currency",
+    "claim_request_costs", "claim_costs",
+    "claim_interest_rate", "claim_interest_from_date", "claim_interest_to_date",
+    "claim_interest_type", "claim_interest_on_costs",
     # Section 8: Details
     "claim_description", "claim_basis", "claim_evidence",
     # Section 9: Oral hearing
-    "request_oral_hearing",
-    # Section 10: Certificate
-    "request_enforcement_certificate",
+    "request_oral_hearing", "oral_hearing_reasons",
+    "request_personal_attendance", "personal_attendance_reasons",
+    # Section 10: Electronic service
+    "consent_electronic_service", "consent_electronic_communication",
+    # Section 11: Certificate
+    "request_enforcement_certificate", "certificate_language",
     # Section 12: Additional info
     "additional_information",
     # Assessment
@@ -141,7 +148,13 @@ ALLOWED_CASE_FIELDS = {
 ALLOWED_STATUS_VALUES = {s.value for s in CaseStatus}
 
 
-BOOLEAN_CASE_FIELDS = {"is_cross_border", "request_oral_hearing", "request_enforcement_certificate"}
+BOOLEAN_CASE_FIELDS = {
+    "is_cross_border", "claimant_is_legal_person", "defendant_is_legal_person",
+    "request_oral_hearing", "request_personal_attendance",
+    "claim_request_costs", "claim_interest_on_costs",
+    "consent_electronic_service", "consent_electronic_communication",
+    "request_enforcement_certificate",
+}
 
 
 def _apply_case_updates(case: Case, updates: dict):
