@@ -216,7 +216,7 @@ async def get_llm_response(
             model=settings.openai_model,
             messages=messages,
             temperature=0.3,
-            max_tokens=2500,
+            max_completion_tokens=2500,
         )
 
         content = response.choices[0].message.content
