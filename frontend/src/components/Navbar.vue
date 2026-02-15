@@ -66,7 +66,7 @@ function handleLogout() {
   height: 32px;
   width: auto;
   object-fit: contain;
-  filter: brightness(0) invert(1);
+  border-radius: 4px;
 }
 
 .navbar-links {

@@ -113,7 +113,7 @@ async function handleLogin() {
   height: 48px;
   width: auto;
   object-fit: contain;
-  filter: brightness(0) invert(1);
+  border-radius: 6px;
   margin-bottom: 12px;
 }
 

@@ -522,8 +522,7 @@ function probabilityClass(p) {
   width: 24px;
   height: 24px;
   object-fit: contain;
-  filter: brightness(0) invert(1);
-  border-radius: 0;
+  border-radius: 4px;
 }
 
 .message-body {
