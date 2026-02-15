@@ -43,36 +43,44 @@ class CaseCreate(BaseModel):
 
 class CaseUpdate(BaseModel):
     title: Optional[str] = None
-    # Section 1
+    # Section 1: Court
     court_name: Optional[str] = None
     court_address: Optional[str] = None
     court_country: Optional[str] = None
-    # Section 2
+    # Section 2: Claimant
+    claimant_is_legal_person: Optional[bool] = None
     claimant_name: Optional[str] = None
+    claimant_date_of_birth: Optional[str] = None
     claimant_id_number: Optional[str] = None
     claimant_address: Optional[str] = None
     claimant_city: Optional[str] = None
     claimant_country: Optional[str] = None
     claimant_phone: Optional[str] = None
+    claimant_fax: Optional[str] = None
     claimant_email: Optional[str] = None
+    claimant_other: Optional[str] = None
     claimant_representative: Optional[str] = None
-    # Section 3
+    # Section 3: Defendant
+    defendant_is_legal_person: Optional[bool] = None
     defendant_name: Optional[str] = None
+    defendant_date_of_birth: Optional[str] = None
     defendant_id_number: Optional[str] = None
     defendant_address: Optional[str] = None
     defendant_city: Optional[str] = None
     defendant_country: Optional[str] = None
     defendant_phone: Optional[str] = None
+    defendant_fax: Optional[str] = None
     defendant_email: Optional[str] = None
+    defendant_other: Optional[str] = None
     defendant_representative: Optional[str] = None
-    # Section 4
+    # Section 4: Jurisdiction
     jurisdiction_basis: Optional[str] = None
     jurisdiction_details: Optional[str] = None
-    # Section 5
+    # Section 5: Cross-border
     claimant_domicile_country: Optional[str] = None
     defendant_domicile_country: Optional[str] = None
     court_member_state: Optional[str] = None
-    # Section 7
+    # Section 7: Claim
     claim_amount: Optional[float] = None
     claim_currency: Optional[str] = None
     claim_non_monetary: Optional[str] = None
@@ -80,11 +88,14 @@ class CaseUpdate(BaseModel):
     claim_interest_rate: Optional[float] = None
     claim_interest_from_date: Optional[str] = None
     claim_interest_type: Optional[str] = None
-    # Section 8
+    # Section 8: Details
     claim_description: Optional[str] = None
     claim_basis: Optional[str] = None
     claim_evidence: Optional[str] = None
+    # Section 9: Oral hearing
     request_oral_hearing: Optional[bool] = None
+    # Section 12: Additional info
+    additional_information: Optional[str] = None
 
 
 class CaseRead(BaseModel):
@@ -96,22 +107,30 @@ class CaseRead(BaseModel):
     court_address: Optional[str] = None
     court_country: Optional[str] = None
     # Section 2
+    claimant_is_legal_person: Optional[bool] = None
     claimant_name: Optional[str] = None
+    claimant_date_of_birth: Optional[str] = None
     claimant_id_number: Optional[str] = None
     claimant_address: Optional[str] = None
     claimant_city: Optional[str] = None
     claimant_country: Optional[str] = None
     claimant_phone: Optional[str] = None
+    claimant_fax: Optional[str] = None
     claimant_email: Optional[str] = None
+    claimant_other: Optional[str] = None
     claimant_representative: Optional[str] = None
     # Section 3
+    defendant_is_legal_person: Optional[bool] = None
     defendant_name: Optional[str] = None
+    defendant_date_of_birth: Optional[str] = None
     defendant_id_number: Optional[str] = None
     defendant_address: Optional[str] = None
     defendant_city: Optional[str] = None
     defendant_country: Optional[str] = None
     defendant_phone: Optional[str] = None
+    defendant_fax: Optional[str] = None
     defendant_email: Optional[str] = None
+    defendant_other: Optional[str] = None
     defendant_representative: Optional[str] = None
     # Section 4
     jurisdiction_basis: Optional[str] = None
@@ -136,9 +155,12 @@ class CaseRead(BaseModel):
     claim_description: Optional[str] = None
     claim_basis: Optional[str] = None
     claim_evidence: Optional[str] = None
-    request_oral_hearing: Optional[bool] = None
     # Section 9
+    request_oral_hearing: Optional[bool] = None
+    # Section 10
     request_enforcement_certificate: Optional[bool] = None
+    # Section 12
+    additional_information: Optional[str] = None
     # Assessment
     applicability_result: Optional[str] = None
     success_probability: Optional[float] = None

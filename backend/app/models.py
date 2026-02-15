@@ -61,31 +61,43 @@ class Case(Base):
     court_country = Column(String(2))
 
     # --- Form A Section 2: Claimant (Kläger) ---
-    claimant_name = Column(String(256))
+    claimant_is_legal_person = Column(Boolean, default=False)  # natural vs legal person
+    claimant_name = Column(String(256))  # surname+first / entity name
+    claimant_date_of_birth = Column(String(32))
     claimant_id_number = Column(String(128))  # Personal ID / passport / registration no.
     claimant_address = Column(Text)  # Street and number / PO box
     claimant_city = Column(String(256))  # City and postal code
     claimant_country = Column(String(2))
     claimant_phone = Column(String(64))
+    claimant_fax = Column(String(64))
     claimant_email = Column(String(320))
-    claimant_representative = Column(Text)  # Representative name + contact details
-    claimant_other = Column(Text)  # Other details (fax, etc.)
+    claimant_other = Column(Text)  # Other details
+    claimant_representative = Column(Text)  # Section 2.2: Representative name + contact
 
     # --- Form A Section 3: Defendant (Beklagter) ---
+    defendant_is_legal_person = Column(Boolean, default=False)
     defendant_name = Column(String(256))
+    defendant_date_of_birth = Column(String(32))
     defendant_id_number = Column(String(128))
     defendant_address = Column(Text)
     defendant_city = Column(String(256))
     defendant_country = Column(String(2))
     defendant_phone = Column(String(64))
+    defendant_fax = Column(String(64))
     defendant_email = Column(String(320))
-    defendant_representative = Column(Text)
     defendant_other = Column(Text)
+    defendant_representative = Column(Text)  # Section 3.2
 
-    # --- Form A Section 4: Jurisdiction basis ---
-    # 4.1 Domicile of defendant, 4.2 Place of performance,
-    # 4.3 Place of harmful event, 4.4 Consumer domicile,
-    # 4.5 Branch/agency, 4.6 Employment, 4.7 Choice of court, 4.8 Other
+    # --- Form A Section 4: Jurisdiction basis (Brüssel-Ia-VO) ---
+    # Official numbering per Delegated Regulation 2017/1259:
+    # 4.1 Domicile of defendant
+    # 4.2 Domicile of consumer (consumer contracts)
+    # 4.3 Domicile of policyholder/insured/beneficiary (insurance)
+    # 4.4 Place of performance of contractual obligation
+    # 4.5 Place of harmful event (tort/delict)
+    # 4.6 Place of immovable property
+    # 4.7 Choice of court agreed by parties
+    # 4.8 Other (specify)
     jurisdiction_basis = Column(String(64))  # e.g. "4.1", "4.7"
     jurisdiction_details = Column(Text)
 
@@ -112,10 +124,15 @@ class Case(Base):
     claim_description = Column(Text)  # 8.1 Substance of claim
     claim_basis = Column(Text)  # Legal basis of the claim
     claim_evidence = Column(Text)  # 8.2 Evidence / supporting documents
-    request_oral_hearing = Column(Boolean, default=False)  # Hearing preference
 
-    # --- Form A Section 9: Certificate request ---
+    # --- Form A Section 9: Oral hearing ---
+    request_oral_hearing = Column(Boolean, default=False)
+
+    # --- Form A Section 10: Certificate for enforcement (Form D) ---
     request_enforcement_certificate = Column(Boolean, default=True)
+
+    # --- Form A Section 12: Additional information ---
+    additional_information = Column(Text)
 
     # --- Assessment fields ---
     applicability_result = Column(Text)

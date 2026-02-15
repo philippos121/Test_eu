@@ -107,13 +107,15 @@ ALLOWED_CASE_FIELDS = {
     # Section 1: Court
     "court_name", "court_address", "court_country",
     # Section 2: Claimant
-    "claimant_name", "claimant_id_number", "claimant_address", "claimant_city",
-    "claimant_country", "claimant_phone", "claimant_email", "claimant_representative",
-    "claimant_other",
+    "claimant_is_legal_person", "claimant_name", "claimant_date_of_birth",
+    "claimant_id_number", "claimant_address", "claimant_city",
+    "claimant_country", "claimant_phone", "claimant_fax", "claimant_email",
+    "claimant_other", "claimant_representative",
     # Section 3: Defendant
-    "defendant_name", "defendant_id_number", "defendant_address", "defendant_city",
-    "defendant_country", "defendant_phone", "defendant_email", "defendant_representative",
-    "defendant_other",
+    "defendant_is_legal_person", "defendant_name", "defendant_date_of_birth",
+    "defendant_id_number", "defendant_address", "defendant_city",
+    "defendant_country", "defendant_phone", "defendant_fax", "defendant_email",
+    "defendant_other", "defendant_representative",
     # Section 4: Jurisdiction
     "jurisdiction_basis", "jurisdiction_details",
     # Section 5: Cross-border
@@ -125,9 +127,13 @@ ALLOWED_CASE_FIELDS = {
     "claim_amount", "claim_currency", "claim_non_monetary", "claim_costs",
     "claim_interest_rate", "claim_interest_from_date", "claim_interest_type",
     # Section 8: Details
-    "claim_description", "claim_basis", "claim_evidence", "request_oral_hearing",
-    # Section 9: Certificate
+    "claim_description", "claim_basis", "claim_evidence",
+    # Section 9: Oral hearing
+    "request_oral_hearing",
+    # Section 10: Certificate
     "request_enforcement_certificate",
+    # Section 12: Additional info
+    "additional_information",
     # Assessment
     "success_probability", "applicability_result", "assessment_summary", "applicable_law",
 }

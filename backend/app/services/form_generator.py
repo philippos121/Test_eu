@@ -2,19 +2,22 @@
 PDF Form Generator for EU Small Claims Procedure.
 
 Generates Form A (Klageformblatt / Claim Form) per Annex I of
-Regulation (EC) No 861/2007 as amended by Regulation (EU) 2015/2421.
+Regulation (EC) No 861/2007 as amended by Regulation (EU) 2015/2421,
+with updated annexes from Delegated Regulation (EU) 2017/1259.
 
-Form A structure (10 sections):
+Official Form A structure (12 sections):
   1. Court/Tribunal
-  2. Claimant details (2.1–2.9)
-  3. Defendant details (3.1–3.9)
-  4. Jurisdiction basis (4.1–4.8)
+  2. Claimant details (2.1 identity + 2.2 representative)
+  3. Defendant details (3.1 identity + 3.2 representative)
+  4. Jurisdiction basis (4.1–4.8 per Brussels Ia Regulation)
   5. Cross-border nature (5.1–5.3)
-  6. Bank details — optional (6.1–6.2)
-  7. Claim — monetary / non-monetary (7.1–7.3 + interest)
-  8. Details of claim — substance, evidence, hearing (8.1–8.2)
-  9. Certificate request for cross-border enforcement
- 10. Date, place, signature & declaration
+  6. Bank details — optional (6.1–6.2 + confidential appendix)
+  7. Claim — monetary / non-monetary (7.1–7.2 + interest)
+  8. Details of claim — substance + evidence (8.1–8.2)
+  9. Oral hearing request
+ 10. Certificate for enforcement (Form D)
+ 11. Date, place, signature & declaration
+ 12. Additional information
 """
 
 import os
@@ -71,11 +74,11 @@ EU_COUNTRIES = {
 
 JURISDICTION_BASES = {
     "4.1": "Wohnsitz/Sitz des Beklagten (Art. 4 Brüssel-Ia-VO)",
-    "4.2": "Erfüllungsort der vertraglichen Verpflichtung (Art. 7 Nr. 1 Brüssel-Ia-VO)",
-    "4.3": "Ort des schädigenden Ereignisses (Art. 7 Nr. 2 Brüssel-Ia-VO)",
-    "4.4": "Wohnsitz des Verbrauchers (Art. 18 Brüssel-Ia-VO)",
-    "4.5": "Niederlassung/Zweigniederlassung (Art. 7 Nr. 5 Brüssel-Ia-VO)",
-    "4.6": "Arbeitsort (Art. 21 Brüssel-Ia-VO)",
+    "4.2": "Wohnsitz des Verbrauchers (Art. 18 Brüssel-Ia-VO)",
+    "4.3": "Wohnsitz des Versicherungsnehmers/Versicherten (Art. 11-14 Brüssel-Ia-VO)",
+    "4.4": "Erfüllungsort der vertraglichen Verpflichtung (Art. 7 Nr. 1 Brüssel-Ia-VO)",
+    "4.5": "Ort des schädigenden Ereignisses (Art. 7 Nr. 2 Brüssel-Ia-VO)",
+    "4.6": "Belegenheit der unbeweglichen Sache (Art. 24 Nr. 1 Brüssel-Ia-VO)",
     "4.7": "Gerichtsstandsvereinbarung der Parteien (Art. 25 Brüssel-Ia-VO)",
     "4.8": "Sonstige Grundlage (bitte angeben)",
 }
@@ -185,31 +188,45 @@ def generate_form_a(case: Case) -> tuple[str, str]:
 
     # ── Section 2: Kläger / Claimant ─────────────────────────────────────
     el.append(Paragraph("2. Angaben zum Kläger / Claimant", S["section"]))
+    c_type = "Juristische Person" if case.claimant_is_legal_person else "Natürliche Person"
+    el.append(Paragraph(f"<b>2.1</b> {c_type}", S["normal"]))
     el.append(_field_table([
-        ["2.1 Name:", _val(case.claimant_name)],
-        ["2.2 Ausweis-/Pass-/Reg.Nr.:", _val(case.claimant_id_number)],
-        ["2.3 Straße und Nr.:", _val(case.claimant_address)],
-        ["2.4 Ort und PLZ:", _val(case.claimant_city)],
-        ["2.5 Land:", _country(case.claimant_country)],
-        ["2.6 Telefon:", _val(case.claimant_phone)],
-        ["2.7 E-Mail:", _val(case.claimant_email)],
-        ["2.8 Vertreter (ggf.):", _val(case.claimant_representative)],
-        ["2.9 Sonstiges:", _val(case.claimant_other)],
+        ["Name:", _val(case.claimant_name)],
+        ["Geburtsdatum:", _val(case.claimant_date_of_birth)],
+        ["Ausweis-/Reg.Nr.:", _val(case.claimant_id_number)],
+        ["Straße und Nr.:", _val(case.claimant_address)],
+        ["Ort und PLZ:", _val(case.claimant_city)],
+        ["Land:", _country(case.claimant_country)],
+        ["Telefon:", _val(case.claimant_phone)],
+        ["Fax:", _val(case.claimant_fax)],
+        ["E-Mail:", _val(case.claimant_email)],
+        ["Sonstiges:", _val(case.claimant_other)],
     ]))
+    if case.claimant_representative:
+        el.append(Spacer(1, 2 * mm))
+        el.append(Paragraph("<b>2.2 Vertreter / Representative</b>", S["normal"]))
+        el.append(Paragraph(case.claimant_representative, S["normal"]))
 
     # ── Section 3: Beklagter / Defendant ─────────────────────────────────
     el.append(Paragraph("3. Angaben zum Beklagten / Defendant", S["section"]))
+    d_type = "Juristische Person" if case.defendant_is_legal_person else "Natürliche Person"
+    el.append(Paragraph(f"<b>3.1</b> {d_type}", S["normal"]))
     el.append(_field_table([
-        ["3.1 Name:", _val(case.defendant_name)],
-        ["3.2 Ausweis-/Pass-/Reg.Nr.:", _val(case.defendant_id_number)],
-        ["3.3 Straße und Nr.:", _val(case.defendant_address)],
-        ["3.4 Ort und PLZ:", _val(case.defendant_city)],
-        ["3.5 Land:", _country(case.defendant_country)],
-        ["3.6 Telefon:", _val(case.defendant_phone)],
-        ["3.7 E-Mail:", _val(case.defendant_email)],
-        ["3.8 Vertreter (ggf.):", _val(case.defendant_representative)],
-        ["3.9 Sonstiges:", _val(case.defendant_other)],
+        ["Name:", _val(case.defendant_name)],
+        ["Geburtsdatum:", _val(case.defendant_date_of_birth)],
+        ["Ausweis-/Reg.Nr.:", _val(case.defendant_id_number)],
+        ["Straße und Nr.:", _val(case.defendant_address)],
+        ["Ort und PLZ:", _val(case.defendant_city)],
+        ["Land:", _country(case.defendant_country)],
+        ["Telefon:", _val(case.defendant_phone)],
+        ["Fax:", _val(case.defendant_fax)],
+        ["E-Mail:", _val(case.defendant_email)],
+        ["Sonstiges:", _val(case.defendant_other)],
     ]))
+    if case.defendant_representative:
+        el.append(Spacer(1, 2 * mm))
+        el.append(Paragraph("<b>3.2 Vertreter / Representative</b>", S["normal"]))
+        el.append(Paragraph(case.defendant_representative, S["normal"]))
 
     # ── Section 4: Zuständigkeit / Jurisdiction ──────────────────────────
     el.append(Paragraph(
@@ -359,9 +376,11 @@ def generate_form_a(case: Case) -> tuple[str, str]:
     for para in evidence.split("\n"):
         if para.strip():
             el.append(Paragraph(f"&nbsp;&nbsp;- {para.strip()}", S["normal"]))
-    el.append(Spacer(1, 2 * mm))
 
-    # Hearing preference
+    # ── Section 9: Mündliche Verhandlung / Oral hearing ──────────────────
+    el.append(Paragraph(
+        "9. Mündliche Verhandlung / Oral hearing", S["section"]
+    ))
     hearing = _checkbox(bool(case.request_oral_hearing))
     el.append(Paragraph(
         f"{hearing} Ich beantrage eine mündliche Verhandlung / "
@@ -370,35 +389,35 @@ def generate_form_a(case: Case) -> tuple[str, str]:
     ))
     el.append(Paragraph(
         "<i>(Gemäß Art. 5 Abs. 1a der VO ist das Verfahren grundsätzlich "
-        "schriftlich; eine mündliche Verhandlung findet nur statt, wenn das "
-        "Gericht dies für erforderlich hält oder eine Partei dies beantragt "
-        "und das Gericht dem zustimmt.)</i>",
+        "schriftlich. Das Gericht kann eine mündliche Verhandlung anordnen "
+        "oder auf Antrag einer Partei zulassen. Eine Verhandlung per "
+        "Videokonferenz/Telekonferenz ist möglich.)</i>",
         S["small"],
     ))
 
-    # ── Section 9: Bestätigung / Certificate ─────────────────────────────
+    # ── Section 10: Bestätigung / Certificate ────────────────────────────
     el.append(Paragraph(
-        "9. Bestätigung / Certificate for enforcement", S["section"]
+        "10. Bestätigung des Urteils / Certificate for enforcement", S["section"]
     ))
     cert = _checkbox(case.request_enforcement_certificate in (True, None))
     el.append(Paragraph(
         f"{cert} Ich beantrage die Ausstellung einer Bestätigung gemäß "
         f"Art. 20 Abs. 2 der Verordnung (EG) Nr. 861/2007 für die "
-        f"grenzüberschreitende Vollstreckung des Urteils.<br/>"
-        f"<i>I request a certificate pursuant to Article 20(2) of "
-        f"Regulation (EC) No 861/2007 for the cross-border enforcement "
-        f"of the judgment (Form D, Annex IV).</i>",
+        f"grenzüberschreitende Vollstreckung des Urteils (Formblatt D, "
+        f"Anhang IV).<br/>"
+        f"<i>I request the court to issue a certificate pursuant to "
+        f"Article 20(2) of Regulation (EC) No 861/2007 for cross-border "
+        f"enforcement (Form D, Annex IV).</i>",
         S["normal"],
     ))
 
-    # ── Section 10: Datum und Unterschrift / Date and Signature ──────────
+    # ── Section 11: Datum und Unterschrift / Date and Signature ──────────
     el.append(Paragraph(
-        "10. Datum und Unterschrift / Date and signature", S["section"]
+        "11. Datum und Unterschrift / Date, place and signature", S["section"]
     ))
     el.append(Paragraph(
         "Ich erkläre, dass die vorstehenden Angaben meines Wissens "
-        "wahrheitsgemäß und vollständig sind. Ich bin mir bewusst, dass "
-        "unwahre Angaben rechtliche Konsequenzen haben können.<br/>"
+        "wahrheitsgemäß und vollständig sind.<br/>"
         "<i>I declare that the information given above is true and complete "
         "to the best of my knowledge and belief.</i>",
         S["normal"],
@@ -411,15 +430,24 @@ def generate_form_a(case: Case) -> tuple[str, str]:
         ["Unterschrift / Signature:", "___________________________________"],
     ]))
 
+    # ── Section 12: Zusätzliche Angaben / Additional information ─────────
+    if case.additional_information:
+        el.append(Paragraph(
+            "12. Zusätzliche Angaben / Additional information", S["section"]
+        ))
+        for para in case.additional_information.split("\n"):
+            if para.strip():
+                el.append(Paragraph(para.strip(), S["normal"]))
+
     # ── Footer / Disclaimer ──────────────────────────────────────────────
     el.append(Spacer(1, 10 * mm))
     el.append(Paragraph(
         "Dieses Formular wurde automatisch auf Grundlage der vom Nutzer "
         "gemachten Angaben erstellt. Es orientiert sich am Formblatt A "
-        "(Anhang I) der Verordnung (EG) Nr. 861/2007 in der Fassung der "
-        "Verordnung (EU) 2015/2421. Bitte prüfen Sie alle Angaben "
-        "sorgfältig vor Einreichung beim zuständigen Gericht. "
-        "Dieses Dokument ersetzt keine Rechtsberatung. "
+        "(Anhang I) der VO (EG) Nr. 861/2007 i.d.F. der VO (EU) 2015/2421, "
+        "mit aktualisierten Anhängen gem. Delegierter VO (EU) 2017/1259. "
+        "Bitte prüfen Sie alle Angaben sorgfältig vor Einreichung beim "
+        "zuständigen Gericht. Dieses Dokument ersetzt keine Rechtsberatung. "
         "Das offizielle Formular ist unter https://e-justice.europa.eu "
         "verfügbar.",
         S["footer"],

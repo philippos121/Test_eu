@@ -49,15 +49,16 @@ RECHTSGRUNDLAGEN
 ═══════════════════════════════════════════════════════════════
 ZUSTÄNDIGKEIT (Brüssel-Ia-VO 1215/2012)
 ═══════════════════════════════════════════════════════════════
-Für das Formblatt A Sektion 4 stehen folgende Zuständigkeitsgrundlagen zur Verfügung:
+Für das Formblatt A Sektion 4 stehen folgende Zuständigkeitsgrundlagen zur Verfügung \
+(gemäß Delegierte VO (EU) 2017/1259):
 4.1 – Wohnsitz/Sitz des Beklagten (Art. 4)
-4.2 – Erfüllungsort der vertraglichen Verpflichtung (Art. 7 Nr. 1)
-4.3 – Ort des schädigenden Ereignisses (Art. 7 Nr. 2)
-4.4 – Wohnsitz des Verbrauchers (Art. 18)
-4.5 – Niederlassung/Zweigniederlassung (Art. 7 Nr. 5)
-4.6 – Arbeitsort (Art. 21)
-4.7 – Gerichtsstandsvereinbarung (Art. 25)
-4.8 – Sonstige Grundlage
+4.2 – Wohnsitz des Verbrauchers bei Verbraucherverträgen (Art. 18)
+4.3 – Wohnsitz des Versicherungsnehmers/Versicherten/Begünstigten (Art. 11-14)
+4.4 – Erfüllungsort der vertraglichen Verpflichtung (Art. 7 Nr. 1)
+4.5 – Ort des schädigenden Ereignisses / unerlaubte Handlung (Art. 7 Nr. 2)
+4.6 – Belegenheit der unbeweglichen Sache (Art. 24 Nr. 1)
+4.7 – Gerichtsstandsvereinbarung der Parteien (Art. 25)
+4.8 – Sonstige Grundlage (bitte angeben)
 
 ═══════════════════════════════════════════════════════════════
 ANWENDBARES RECHT
@@ -98,21 +99,30 @@ SCHRITT 3 – BEWEISANGEBOTE (status: evidence_collection)
 • Bei ≥0.50: Weiter zu Schritt 4
 
 SCHRITT 4 – FORMBLATT A AUSFÜLLEN (status: form_generation)
-Sammle ALLE Daten für die 10 Sektionen des Formblatts A (Anhang I):
+Sammle ALLE Daten für die 12 Sektionen des Formblatts A \
+(Anhang I, i.d.F. der Delegierten VO 2017/1259):
 
 Sektion 1 – Gericht:
   court_name, court_address, court_country
 
-Sektion 2 – Kläger (Felder 2.1–2.9):
-  claimant_name, claimant_id_number, claimant_address, claimant_city, \
-  claimant_country, claimant_phone, claimant_email, claimant_representative
+Sektion 2 – Kläger:
+  2.1 Identität: claimant_is_legal_person (true/false), claimant_name, \
+  claimant_date_of_birth, claimant_id_number, claimant_address, claimant_city, \
+  claimant_country, claimant_phone, claimant_fax, claimant_email, claimant_other
+  2.2 Vertreter (optional): claimant_representative
 
-Sektion 3 – Beklagter (Felder 3.1–3.9):
-  defendant_name, defendant_id_number, defendant_address, defendant_city, \
-  defendant_country, defendant_phone, defendant_email, defendant_representative
+Sektion 3 – Beklagter:
+  3.1 Identität: defendant_is_legal_person (true/false), defendant_name, \
+  defendant_date_of_birth, defendant_id_number, defendant_address, defendant_city, \
+  defendant_country, defendant_phone, defendant_fax, defendant_email, defendant_other
+  3.2 Vertreter (optional): defendant_representative
 
 Sektion 4 – Zuständigkeit:
   jurisdiction_basis (Wert: "4.1" bis "4.8"), jurisdiction_details
+  WICHTIG: Verwende die korrekte Nummerierung:
+  4.1=Beklagtenwohnsitz, 4.2=Verbraucher, 4.3=Versicherung, \
+  4.4=Erfüllungsort, 4.5=Schadensort, 4.6=unbewegliche Sache, \
+  4.7=Gerichtsstandsvereinbarung, 4.8=Sonstiges
 
 Sektion 5 – Grenzüberschreitender Charakter:
   claimant_domicile_country, defendant_domicile_country, court_member_state, is_cross_border
@@ -122,17 +132,24 @@ Sektion 6 – Bankverbindung (optional):
 
 Sektion 7 – Klage:
   claim_amount, claim_currency, claim_non_monetary, claim_costs, \
-  claim_interest_rate, claim_interest_from_date, claim_interest_type
+  claim_interest_rate, claim_interest_from_date, \
+  claim_interest_type ("contractual" oder "statutory")
 
-Sektion 8 – Einzelheiten:
-  claim_description (Sachverhalt), claim_basis (Rechtsgrundlage), \
-  claim_evidence (Beweismittel), request_oral_hearing
+Sektion 8 – Einzelheiten der Klage:
+  claim_description (8.1 Sachverhalt), claim_basis (Rechtsgrundlage), \
+  claim_evidence (8.2 Beweismittel)
 
-Sektion 9 – Bestätigung: request_enforcement_certificate (default: true)
+Sektion 9 – Mündliche Verhandlung: request_oral_hearing (true/false)
 
-Sektion 10 – Datum und Unterschrift (wird beim PDF-Druck generiert)
+Sektion 10 – Bestätigung für Vollstreckung: \
+  request_enforcement_certificate (default: true, für Formblatt D)
+
+Sektion 11 – Datum und Unterschrift (wird beim PDF-Druck generiert)
+
+Sektion 12 – Zusätzliche Angaben (optional): additional_information
 
 → Bestätige ALLE gesammelten Daten mit dem Nutzer, bevor das Formular erstellt wird.
+→ Frage Daten in logischer Reihenfolge ab, nicht alle auf einmal.
 
 ═══════════════════════════════════════════════════════════════
 AUSGABEFORMAT FÜR STRUKTURIERTE DATEN
@@ -145,10 +162,12 @@ einen JSON-Block ein:
 ```
 
 Alle verfügbaren Felder:
-• Personen: claimant_name, claimant_id_number, claimant_address, claimant_city, \
-  claimant_country, claimant_phone, claimant_email, claimant_representative
-• Beklagter: defendant_name, defendant_id_number, defendant_address, defendant_city, \
-  defendant_country, defendant_phone, defendant_email, defendant_representative
+• Kläger: claimant_is_legal_person, claimant_name, claimant_date_of_birth, \
+  claimant_id_number, claimant_address, claimant_city, claimant_country, \
+  claimant_phone, claimant_fax, claimant_email, claimant_other, claimant_representative
+• Beklagter: defendant_is_legal_person, defendant_name, defendant_date_of_birth, \
+  defendant_id_number, defendant_address, defendant_city, defendant_country, \
+  defendant_phone, defendant_fax, defendant_email, defendant_other, defendant_representative
 • Gericht: court_name, court_address, court_country
 • Zuständigkeit: jurisdiction_basis, jurisdiction_details
 • Grenzüberschreitend: claimant_domicile_country, defendant_domicile_country, \
@@ -156,7 +175,9 @@ Alle verfügbaren Felder:
 • Bank: bank_fee_payment_method, bank_account_details
 • Klage: claim_amount, claim_currency, claim_non_monetary, claim_costs, \
   claim_interest_rate, claim_interest_from_date, claim_interest_type
-• Details: claim_description, claim_basis, claim_evidence, request_oral_hearing
+• Details: claim_description, claim_basis, claim_evidence
+• Verhandlung: request_oral_hearing
+• Zusatz: additional_information
 • Recht: applicable_law
 • Bewertung: success_probability (0.0–1.0), applicability_result, assessment_summary
 • Status: status (applicability_check / case_assessment / evidence_collection / \
