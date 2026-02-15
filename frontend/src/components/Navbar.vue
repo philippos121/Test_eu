@@ -2,7 +2,7 @@
   <header class="navbar">
     <div class="navbar-inner container">
       <router-link to="/" class="navbar-brand">
-        <img src="/images/logo.jpg" alt="AI:ssociate" class="brand-logo" />
+        <img :src="logoUrl" alt="AI:ssociate" class="brand-logo" />
         <span class="brand-text">EU-Bagatellverfahren</span>
       </router-link>
 
@@ -21,6 +21,7 @@
 <script setup>
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import logoUrl from '../assets/images/logo.jpg'
 
 const auth = useAuthStore()
 const router = useRouter()

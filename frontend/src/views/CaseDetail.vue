@@ -134,7 +134,7 @@
               >
                 <div class="message-avatar">
                   <template v-if="msg.role === 'user'">&#128100;</template>
-                  <img v-else src="/images/logo.jpg" alt="AI" class="avatar-logo" />
+                  <img v-else :src="logoUrl" alt="AI" class="avatar-logo" />
                 </div>
                 <div class="message-body">
                   <div class="message-meta">
@@ -148,7 +148,7 @@
               </div>
 
               <div v-if="caseStore.loading" class="message message-assistant">
-                <div class="message-avatar"><img src="/images/logo.jpg" alt="AI" class="avatar-logo" /></div>
+                <div class="message-avatar"><img :src="logoUrl" alt="AI" class="avatar-logo" /></div>
                 <div class="message-body">
                   <div class="message-meta">
                     <span class="message-sender">KI-Assistent</span>
@@ -196,6 +196,7 @@ import { useRoute } from 'vue-router'
 import { useCaseStore } from '../stores/case'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import logoUrl from '../assets/images/logo.jpg'
 
 const route = useRoute()
 const caseStore = useCaseStore()
