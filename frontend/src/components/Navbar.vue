@@ -8,6 +8,7 @@
 
       <nav class="navbar-links">
         <router-link to="/" class="nav-link">Meine Fälle</router-link>
+        <router-link v-if="auth.user?.is_admin" to="/admin" class="nav-link">Admin</router-link>
       </nav>
 
       <div class="navbar-user">

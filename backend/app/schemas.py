@@ -1,10 +1,10 @@
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import BaseModel
 
-from .models import CaseStatus, MessageRole
+from .models import CaseEventType, CaseStatus, MessageRole
 
 
 # --- Auth ---
@@ -21,6 +21,7 @@ class UserRead(BaseModel):
     email: str
     full_name: str
     language: str
+    is_admin: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -237,3 +238,99 @@ class DocumentRead(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# --- Scoring ---
+
+class CaseEventCreate(BaseModel):
+    event_type: CaseEventType
+    payload: dict = {}
+
+
+class CaseEventRead(BaseModel):
+    id: UUID
+    case_id: UUID
+    event_type: CaseEventType
+    payload: dict
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class LLMTraceRead(BaseModel):
+    id: UUID
+    case_id: UUID
+    question: str
+    answer: Optional[str] = None
+    extracted_facts: dict = {}
+    step: Optional[CaseStatus] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ProcessScoreRead(BaseModel):
+    id: UUID
+    case_id: UUID
+    evidence_score: float
+    evidence_breakdown: dict
+    ability_score: float
+    ability_components: dict
+    willingness_score: float
+    willingness_components: dict
+    p_served: float
+    p_default: float
+    p_win_contested: float
+    p_settle: float
+    p_collect: float
+    p_cash_success: float
+    priors_json: dict
+    posteriors_json: dict
+    observations_json: dict
+    drivers_json: list
+    model_version: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PriorsConfigRead(BaseModel):
+    id: UUID
+    rate_name: str
+    claim_subtype: str
+    country: str
+    alpha: float
+    beta: float
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PriorsConfigCreate(BaseModel):
+    rate_name: str
+    claim_subtype: str = "general"
+    country: str = "*"
+    alpha: float = 2.0
+    beta: float = 2.0
+
+
+class PriorsConfigUpdate(BaseModel):
+    alpha: Optional[float] = None
+    beta: Optional[float] = None
+    claim_subtype: Optional[str] = None
+    country: Optional[str] = None
+
+
+class AdminCaseListItem(BaseModel):
+    id: UUID
+    title: str
+    status: CaseStatus
+    claimant_name: Optional[str] = None
+    defendant_name: Optional[str] = None
+    claim_amount: Optional[float] = None
+    claim_currency: Optional[str] = None
+    success_probability: Optional[float] = None
+    p_cash_success: Optional[float] = None
+    created_at: datetime
+    updated_at: datetime
+    user_email: Optional[str] = None

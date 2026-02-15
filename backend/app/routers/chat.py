@@ -4,13 +4,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Case, CaseStatus, ChatMessage, MessageRole, User
+from ..models import Case, CaseLLMTrace, CaseStatus, ChatMessage, MessageRole, User
 from ..schemas import ChatMessageCreate, ChatMessageRead, ChatResponse
 from ..services.llm_agent import build_message_history, get_llm_response
+from ..services.scoring import estimate
 
 router = APIRouter(prefix="/api/cases/{case_id}/chat", tags=["chat"])
 
@@ -93,14 +93,73 @@ async def send_message(
         step=case.status,
     )
     db.add(assistant_msg)
+
+    # Write LLM trace for scoring pipeline
+    extracted_facts = {}
+    if update_data:
+        extracted_facts = _extract_scoring_facts(update_data)
+    trace = CaseLLMTrace(
+        case_id=case.id,
+        question=body.content,
+        answer=response_text,
+        extracted_facts=extracted_facts,
+        step=case.status,
+    )
+    db.add(trace)
+
     await db.commit()
     await db.refresh(case)
     await db.refresh(assistant_msg)
+
+    # Auto-compute scoring after evidence_collection or later stages
+    if case.status in (
+        CaseStatus.EVIDENCE_COLLECTION,
+        CaseStatus.FORM_GENERATION,
+        CaseStatus.COMPLETED,
+    ):
+        try:
+            await estimate(case.id, db)
+            await db.commit()
+        except Exception:
+            pass  # scoring failure should not block chat
 
     return ChatResponse(
         message=ChatMessageRead.model_validate(assistant_msg),
         case=case,
     )
+
+
+def _extract_scoring_facts(update_data: dict) -> dict:
+    """Map LLM update fields to scoring-relevant fact flags."""
+    facts = {}
+
+    desc = str(update_data.get("claim_description", "")).lower()
+    evidence = str(update_data.get("claim_evidence", "")).lower()
+    combined = desc + " " + evidence
+
+    if update_data.get("claim_basis"):
+        facts["has_contract"] = True
+    if any(kw in combined for kw in ["vertrag", "auftrag", "contract", "agreement", "schriftlich"]):
+        facts["has_written_agreement"] = True
+    if any(kw in combined for kw in ["geliefert", "erbracht", "delivered", "performed"]):
+        facts["has_delivery_proof"] = True
+    if any(kw in combined for kw in ["abgenommen", "accepted", "bestätigt"]):
+        facts["has_acceptance"] = True
+    if update_data.get("claim_interest_from_date"):
+        facts["has_due_date"] = True
+    if any(kw in combined for kw in ["mahnung", "reminder", "zahlungserinnerung"]):
+        facts["has_dunning"] = True
+        facts["has_reminder"] = True
+    if any(kw in combined for kw in ["frist", "deadline"]):
+        facts["has_deadline_set"] = True
+    if any(kw in combined for kw in ["nicht geliefert", "mangelhaft", "reklamation", "dispute"]):
+        facts["defendant_disputes"] = True
+    if any(kw in combined for kw in ["mangel", "defect", "quality"]):
+        facts["quality_issue"] = True
+    if any(kw in combined for kw in ["teilzahlung", "partial payment"]):
+        facts["partial_payment"] = True
+
+    return facts
 
 
 ALLOWED_CASE_FIELDS = {

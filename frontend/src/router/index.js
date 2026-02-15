@@ -25,6 +25,24 @@ const routes = [
     component: () => import('../views/CaseDetail.vue'),
     meta: { auth: true },
   },
+  {
+    path: '/admin',
+    name: 'AdminDashboard',
+    component: () => import('../views/AdminDashboard.vue'),
+    meta: { auth: true },
+  },
+  {
+    path: '/admin/cases/:id/score',
+    name: 'AdminCaseScore',
+    component: () => import('../views/AdminCaseScore.vue'),
+    meta: { auth: true },
+  },
+  {
+    path: '/admin/priors',
+    name: 'AdminPriors',
+    component: () => import('../views/AdminPriors.vue'),
+    meta: { auth: true },
+  },
 ]
 
 const router = createRouter({
