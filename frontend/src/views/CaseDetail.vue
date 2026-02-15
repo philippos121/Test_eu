@@ -196,7 +196,7 @@ import { useRoute } from 'vue-router'
 import { useCaseStore } from '../stores/case'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import logoUrl from '../assets/images/logo.jpg'
+import logoUrl from '../assets/images/logo.png'
 
 const route = useRoute()
 const caseStore = useCaseStore()
@@ -519,12 +519,9 @@ function probabilityClass(p) {
 }
 
 .avatar-logo {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   object-fit: contain;
-  background: white;
-  padding: 2px 4px;
-  border-radius: 4px;
 }
 
 .message-body {

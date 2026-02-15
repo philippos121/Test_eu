@@ -21,7 +21,7 @@
 <script setup>
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import logoUrl from '../assets/images/logo.jpg'
+import logoUrl from '../assets/images/logo.png'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -63,12 +63,9 @@ function handleLogout() {
 }
 
 .brand-logo {
-  height: 28px;
+  height: 32px;
   width: auto;
   object-fit: contain;
-  background: white;
-  padding: 4px 8px;
-  border-radius: 6px;
 }
 
 .navbar-links {

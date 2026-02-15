@@ -64,7 +64,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import logoUrl from '../assets/images/logo.jpg'
+import logoUrl from '../assets/images/logo.png'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -110,12 +110,9 @@ async function handleLogin() {
 }
 
 .auth-logo {
-  height: 44px;
+  height: 48px;
   width: auto;
   object-fit: contain;
-  background: white;
-  padding: 6px 14px;
-  border-radius: 8px;
   margin-bottom: 12px;
 }
 
