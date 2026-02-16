@@ -21,7 +21,7 @@ class UserRead(BaseModel):
     email: str
     full_name: str
     language: str
-    is_admin: bool = False
+    is_admin: Optional[bool] = False
     created_at: datetime
 
     model_config = {"from_attributes": True}

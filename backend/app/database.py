@@ -29,8 +29,26 @@ def _sync_add_missing_columns(conn):
         for col in table.columns:
             if col.name not in existing:
                 col_type = col.type.compile(conn.dialect)
+                default_clause = ""
+                if col.server_default is not None:
+                    default_clause = f" DEFAULT {col.server_default.arg.text}"
                 conn.execute(text(
-                    f'ALTER TABLE {table_name} ADD COLUMN "{col.name}" {col_type}'
+                    f'ALTER TABLE {table_name} ADD COLUMN "{col.name}" {col_type}{default_clause}'
+                ))
+
+
+def _sync_fix_null_defaults(conn):
+    """Backfill NULL values for columns that have a server_default."""
+    inspector = sa_inspect(conn)
+    for table_name, table in Base.metadata.tables.items():
+        if not inspector.has_table(table_name):
+            continue
+        for col in table.columns:
+            if col.server_default is not None:
+                default_val = col.server_default.arg.text
+                conn.execute(text(
+                    f'UPDATE {table_name} SET "{col.name}" = {default_val} '
+                    f'WHERE "{col.name}" IS NULL'
                 ))
 
 
@@ -38,3 +56,4 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_sync_add_missing_columns)
+        await conn.run_sync(_sync_fix_null_defaults)

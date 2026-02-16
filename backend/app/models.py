@@ -12,6 +12,7 @@ from sqlalchemy import (
     Text,
     Float,
     Boolean,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -55,7 +56,7 @@ class User(Base):
     hashed_password = Column(String(128), nullable=False)
     full_name = Column(String(256), nullable=False)
     language = Column(String(5), default="de")
-    is_admin = Column(Boolean, default=False)
+    is_admin = Column(Boolean, default=False, server_default=text("false"))
     created_at = Column(DateTime, default=datetime.utcnow)
 
     cases = relationship("Case", back_populates="user", cascade="all, delete-orphan")
