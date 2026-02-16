@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Case, CaseStatus, ChatMessage, MessageRole, User
-from ..schemas import CaseCreate, CaseRead, CaseUpdate
+from ..models import Case, CaseProcessScore, CaseStatus, ChatMessage, MessageRole, User
+from ..schemas import CaseCreate, CaseRead, CaseUpdate, ProcessScoreRead
 from ..services.llm_agent import get_initial_system_message
 
 router = APIRouter(prefix="/api/cases", tags=["cases"])
@@ -107,3 +107,28 @@ async def update_case(
     await db.commit()
     await db.refresh(case)
     return case
+
+
+@router.get("/{case_id}/score", response_model=Optional[ProcessScoreRead])
+async def get_case_score(
+    case_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get the latest process score for a user's case."""
+    result = await db.execute(
+        select(Case).where(Case.id == case_id, Case.user_id == user.id)
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Fall nicht gefunden.")
+
+    result = await db.execute(
+        select(CaseProcessScore)
+        .where(CaseProcessScore.case_id == case_id)
+        .order_by(CaseProcessScore.created_at.desc())
+        .limit(1)
+    )
+    score = result.scalar_one_or_none()
+    if not score:
+        return None
+    return score

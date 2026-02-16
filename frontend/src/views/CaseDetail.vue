@@ -81,9 +81,12 @@
                 <template v-if="caseStore.currentCase.success_probability != null">
                   <dt>Erfolgsaussicht</dt>
                   <dd>
-                    <span :class="probabilityClass(caseStore.currentCase.success_probability)">
-                      {{ (caseStore.currentCase.success_probability * 100).toFixed(0) }}%
-                    </span>
+                    <a href="#score-panel" class="score-link" @click.prevent="toggleScorePanel">
+                      <span :class="probabilityClass(caseStore.currentCase.success_probability)">
+                        {{ (caseStore.currentCase.success_probability * 100).toFixed(0) }}%
+                      </span>
+                      <span class="score-link-detail">Details &#9662;</span>
+                    </a>
                   </dd>
                 </template>
                 <template v-if="caseStore.currentCase.applicability_result">
@@ -91,6 +94,96 @@
                   <dd>{{ caseStore.currentCase.applicability_result }}</dd>
                 </template>
               </dl>
+            </div>
+
+            <!-- Erfolgswahrscheinlichkeit Panel -->
+            <div v-if="showScorePanel" id="score-panel" class="card mb-2 score-panel fade-in">
+              <h3 class="sidebar-title">Erfolgswahrscheinlichkeit</h3>
+
+              <div v-if="!score" class="text-secondary" style="font-size:0.82rem;">
+                Noch keine detaillierte Berechnung vorhanden.
+              </div>
+
+              <template v-else>
+                <!-- Gesamtwahrscheinlichkeit -->
+                <div class="score-hero-mini">
+                  <div class="score-hero-val" :class="pcashClass(score.p_cash_success)">
+                    {{ (score.p_cash_success * 100).toFixed(1) }}%
+                  </div>
+                  <div class="score-hero-label">Gesamt: "Am Ende bezahlt"</div>
+                </div>
+
+                <!-- 5 Teilwahrscheinlichkeiten -->
+                <div class="score-section">
+                  <div class="score-section-title">Teilwahrscheinlichkeiten</div>
+                  <div v-for="p in probItems" :key="p.key" class="mini-prob-row">
+                    <span class="mini-prob-label">{{ p.label }}</span>
+                    <div class="mini-prob-bar-wrap">
+                      <div class="mini-prob-bar" :style="{ width: (p.value * 100) + '%' }" :class="pcashClass(p.value)"></div>
+                    </div>
+                    <span class="mini-prob-val" :class="pcashClass(p.value)">{{ (p.value * 100).toFixed(0) }}%</span>
+                  </div>
+                </div>
+
+                <!-- Scores -->
+                <div class="score-section">
+                  <div class="score-section-title">Bewertungen</div>
+                  <div class="score-row">
+                    <span>Beweislage</span>
+                    <span :class="scoreColor(score.evidence_score)">{{ score.evidence_score.toFixed(0) }}/100</span>
+                  </div>
+                  <div v-if="score.evidence_breakdown.missing?.length" class="score-missing">
+                    Fehlend: {{ score.evidence_breakdown.missing.join(', ') }}
+                  </div>
+                  <div class="score-row">
+                    <span>Zahlungsfähigkeit</span>
+                    <span :class="scoreColor(score.ability_score)">{{ score.ability_score.toFixed(0) }}/100</span>
+                  </div>
+                  <div class="score-row">
+                    <span>Zahlungswilligkeit</span>
+                    <span :class="scoreColor(score.willingness_score)">{{ score.willingness_score.toFixed(0) }}/100</span>
+                  </div>
+                </div>
+
+                <!-- Wie kam der Score zustande? -->
+                <div v-if="score.drivers_json?.length" class="score-section">
+                  <div class="score-section-title">Wie kam der Score zustande?</div>
+                  <div v-for="(d, i) in score.drivers_json" :key="i" :class="['score-driver', `score-driver-${d.direction}`]">
+                    <span class="score-driver-icon">{{ d.direction === 'positive' ? '+' : '&minus;' }}</span>
+                    <div>
+                      <div class="score-driver-title">{{ d.factor }}</div>
+                      <div class="score-driver-desc">{{ d.detail }}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Bayes-Update -->
+                <div class="score-section">
+                  <div class="score-section-title">Bayes-Update: Prior &rarr; Posterior</div>
+                  <table class="bayes-mini">
+                    <thead>
+                      <tr>
+                        <th>Rate</th>
+                        <th>&alpha;/&beta;</th>
+                        <th>s/n</th>
+                        <th>p&#770;</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="rate in bayesRates" :key="rate">
+                        <td>{{ rateLabels[rate] }}</td>
+                        <td>{{ priors(rate).alpha }}/{{ priors(rate).beta }}</td>
+                        <td>{{ obs(rate).successes }}/{{ obs(rate).trials }}</td>
+                        <td :class="pcashClass(posteriors(rate).mean)">{{ (posteriors(rate).mean * 100).toFixed(0) }}%</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div class="score-meta text-secondary">
+                  Modell {{ score.model_version }} &middot; {{ formatDate(score.created_at) }}
+                </div>
+              </template>
             </div>
 
             <!-- Documents -->
@@ -204,6 +297,7 @@ const caseStore = useCaseStore()
 const messageText = ref('')
 const chatContainer = ref(null)
 const generatingForm = ref(false)
+const showScorePanel = ref(false)
 
 const caseId = computed(() => route.params.id)
 
@@ -241,6 +335,7 @@ onMounted(async () => {
   await Promise.all([
     caseStore.fetchMessages(caseId.value),
     caseStore.fetchDocuments(caseId.value),
+    caseStore.fetchScore(caseId.value),
   ])
   scrollToBottom()
 })
@@ -319,6 +414,46 @@ function statusLabel(status) {
 function probabilityClass(p) {
   if (p >= 0.6) return 'prob-high'
   if (p >= 0.3) return 'prob-medium'
+  return 'prob-low'
+}
+
+// --- Score panel ---
+const score = computed(() => caseStore.processScore)
+
+async function toggleScorePanel() {
+  showScorePanel.value = !showScorePanel.value
+  if (showScorePanel.value && !score.value) {
+    await caseStore.fetchScore(caseId.value)
+  }
+}
+
+const probItems = computed(() => {
+  if (!score.value) return []
+  return [
+    { key: 'served', label: 'Zustellung', value: score.value.p_served },
+    { key: 'default', label: 'Versäumnis', value: score.value.p_default },
+    { key: 'win', label: 'Gewinn b. Bestreitung', value: score.value.p_win_contested },
+    { key: 'settle', label: 'Vergleich', value: score.value.p_settle },
+    { key: 'collect', label: 'Inkasso', value: score.value.p_collect },
+  ]
+})
+
+const bayesRates = ['served', 'default', 'settle', 'collect']
+const rateLabels = { served: 'Zustellung', default: 'Versäumnis', settle: 'Vergleich', collect: 'Inkasso' }
+
+function priors(rate) { return score.value?.priors_json?.[rate] || { alpha: 0, beta: 0 } }
+function obs(rate) { return score.value?.observations_json?.[rate] || { successes: 0, trials: 0 } }
+function posteriors(rate) { return score.value?.posteriors_json?.[rate] || { alpha: 0, beta: 0, mean: 0 } }
+
+function pcashClass(p) {
+  if (p >= 0.5) return 'prob-high'
+  if (p >= 0.25) return 'prob-medium'
+  return 'prob-low'
+}
+
+function scoreColor(s) {
+  if (s >= 60) return 'prob-high'
+  if (s >= 35) return 'prob-medium'
   return 'prob-low'
 }
 </script>
@@ -623,4 +758,103 @@ function probabilityClass(p) {
 .prob-high { color: var(--success); font-weight: 600; }
 .prob-medium { color: var(--warning); font-weight: 600; }
 .prob-low { color: var(--danger); font-weight: 600; }
+
+/* Score Link */
+.score-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+.score-link:hover { text-decoration: none; }
+.score-link-detail {
+  font-size: 0.72rem;
+  color: var(--primary-light);
+  font-weight: 400;
+}
+.score-link:hover .score-link-detail { text-decoration: underline; }
+
+/* Score Panel */
+.score-panel {
+  border-left: 3px solid var(--primary);
+}
+
+.score-hero-mini {
+  text-align: center;
+  padding: 12px 0;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.score-hero-val { font-size: 2rem; font-weight: 800; line-height: 1; }
+.score-hero-label { font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px; }
+
+.score-section { margin-bottom: 14px; }
+.score-section-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--primary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Mini probability bars */
+.mini-prob-row { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+.mini-prob-label { font-size: 0.75rem; width: 100px; flex-shrink: 0; color: var(--text-secondary); }
+.mini-prob-bar-wrap { flex: 1; height: 10px; background: #f0f0f0; border-radius: 5px; overflow: hidden; }
+.mini-prob-bar { height: 100%; border-radius: 5px; transition: width 0.4s ease; min-width: 2px; }
+.mini-prob-bar.prob-high { background: var(--success); }
+.mini-prob-bar.prob-medium { background: var(--warning); }
+.mini-prob-bar.prob-low { background: var(--danger); }
+.mini-prob-val { font-size: 0.75rem; width: 32px; text-align: right; }
+
+/* Score rows */
+.score-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.82rem;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+.score-missing {
+  font-size: 0.72rem;
+  color: var(--danger);
+  padding: 2px 0 6px;
+}
+
+/* Score drivers */
+.score-driver {
+  display: flex;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  font-size: 0.78rem;
+}
+.score-driver-positive { background: #e8f5e9; }
+.score-driver-negative { background: #ffebee; }
+.score-driver-icon { font-weight: 800; font-size: 0.9rem; width: 16px; text-align: center; flex-shrink: 0; }
+.score-driver-positive .score-driver-icon { color: var(--success); }
+.score-driver-negative .score-driver-icon { color: var(--danger); }
+.score-driver-title { font-weight: 600; }
+.score-driver-desc { color: var(--text-secondary); font-size: 0.72rem; }
+
+/* Bayes mini table */
+.bayes-mini { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+.bayes-mini th {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1.5px solid var(--border);
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+.bayes-mini td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.score-meta { font-size: 0.7rem; text-align: right; margin-top: 8px; }
 </style>

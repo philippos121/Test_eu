@@ -7,6 +7,7 @@ export const useCaseStore = defineStore('case', () => {
   const currentCase = ref(null)
   const messages = ref([])
   const documents = ref([])
+  const processScore = ref(null)
   const loading = ref(false)
 
   async function fetchCases() {
@@ -61,14 +62,25 @@ export const useCaseStore = defineStore('case', () => {
     return data
   }
 
+  async function fetchScore(caseId) {
+    try {
+      const { data } = await api.get(`/cases/${caseId}/score`)
+      processScore.value = data
+      return data
+    } catch {
+      processScore.value = null
+      return null
+    }
+  }
+
   function getDownloadUrl(caseId, docId) {
     const token = localStorage.getItem('token')
     return `/api/cases/${caseId}/documents/${docId}/download?token=${token}`
   }
 
   return {
-    cases, currentCase, messages, documents, loading,
+    cases, currentCase, messages, documents, processScore, loading,
     fetchCases, createCase, fetchCase, fetchMessages,
-    sendMessage, fetchDocuments, generateFormA, getDownloadUrl,
+    sendMessage, fetchDocuments, generateFormA, getDownloadUrl, fetchScore,
   }
 })
