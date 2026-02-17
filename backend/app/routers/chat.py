@@ -111,17 +111,15 @@ async def send_message(
     await db.refresh(case)
     await db.refresh(assistant_msg)
 
-    # Auto-compute scoring after evidence_collection or later stages
-    if case.status in (
-        CaseStatus.EVIDENCE_COLLECTION,
-        CaseStatus.FORM_GENERATION,
-        CaseStatus.COMPLETED,
-    ):
-        try:
-            await estimate(case.id, db)
-            await db.commit()
-        except Exception:
-            pass  # scoring failure should not block chat
+    # Auto-compute scoring on every chat interaction so users always see a score
+    try:
+        score_result = await estimate(case.id, db)
+        # Sync the p_cash_success back to the case so the sidebar always shows it
+        case.success_probability = score_result.p_cash_success
+        await db.commit()
+        await db.refresh(case)
+    except Exception:
+        pass  # scoring failure should not block chat
 
     return ChatResponse(
         message=ChatMessageRead.model_validate(assistant_msg),

@@ -78,12 +78,12 @@
                   <dt>Anwendb. Recht</dt>
                   <dd>{{ caseStore.currentCase.applicable_law }}</dd>
                 </template>
-                <template v-if="caseStore.currentCase.success_probability != null">
+                <template v-if="displayProbability != null">
                   <dt>Erfolgsaussicht</dt>
                   <dd>
                     <a href="#score-panel" class="score-link" @click.prevent="toggleScorePanel">
-                      <span :class="probabilityClass(caseStore.currentCase.success_probability)">
-                        {{ (caseStore.currentCase.success_probability * 100).toFixed(0) }}%
+                      <span :class="probabilityClass(displayProbability)">
+                        {{ (displayProbability * 100).toFixed(0) }}%
                       </span>
                       <span class="score-link-detail">Details &#9662;</span>
                     </a>
@@ -357,8 +357,11 @@ async function handleSend() {
   })
   nextTick(scrollToBottom)
   await caseStore.sendMessage(caseId.value, text)
-  // Refresh documents in case status changed to form_generation
-  await caseStore.fetchDocuments(caseId.value)
+  // Refresh documents and score after each message
+  await Promise.all([
+    caseStore.fetchDocuments(caseId.value),
+    caseStore.fetchScore(caseId.value),
+  ])
 }
 
 async function handleGenerateForm() {
@@ -419,6 +422,12 @@ function probabilityClass(p) {
 
 // --- Score panel ---
 const score = computed(() => caseStore.processScore)
+
+// Use process score p_cash_success if available, fall back to LLM-set success_probability
+const displayProbability = computed(() => {
+  if (score.value?.p_cash_success != null) return score.value.p_cash_success
+  return caseStore.currentCase?.success_probability ?? null
+})
 
 async function toggleScorePanel() {
   showScorePanel.value = !showScorePanel.value
