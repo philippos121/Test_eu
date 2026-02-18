@@ -547,7 +547,7 @@ def compute_drivers(
     for rate_name, post in posteriors.items():
         if post.mean < 0.3:
             labels = {
-                "served": "Zustellung",
+                "served": "Schlüssigkeitsprüfung",
                 "default": "Versäumnis",
                 "settle": "Vergleich",
                 "collect": "Inkasso",

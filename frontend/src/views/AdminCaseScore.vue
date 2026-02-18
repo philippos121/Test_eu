@@ -220,7 +220,7 @@ function statusLabel(s) { return STATUS_LABELS[s] || s }
 const probItems = computed(() => {
   if (!score.value) return []
   return [
-    { key: 'p_served', label: 'Zustellung (p_served)', value: score.value.p_served },
+    { key: 'p_served', label: 'Schlüssigkeitsprüfung (p_served)', value: score.value.p_served },
     { key: 'p_default', label: 'Versäumnis (p_default)', value: score.value.p_default },
     { key: 'p_win_contested', label: 'Gewinn b. Bestreitung (p_win_contested)', value: score.value.p_win_contested },
     { key: 'p_settle', label: 'Vergleich (p_settle)', value: score.value.p_settle },
@@ -242,7 +242,7 @@ const willingnessLabels = { base: 'Basis', responded_to_reminder: 'Auf Mahnung r
 const willingnessItems = computed(() => score.value?.willingness_components || {})
 
 const bayesRates = ['served', 'default', 'settle', 'collect']
-const rateLabels = { served: 'Zustellung', default: 'Versäumnis', settle: 'Vergleich', collect: 'Inkasso' }
+const rateLabels = { served: 'Schlüssigkeitsprüfung', default: 'Versäumnis', settle: 'Vergleich', collect: 'Inkasso' }
 
 function priors(rate) { return score.value?.priors_json?.[rate] || { alpha: 0, beta: 0 } }
 function obs(rate) { return score.value?.observations_json?.[rate] || { successes: 0, trials: 0 } }

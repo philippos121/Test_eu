@@ -72,6 +72,16 @@ class CompletedCaseDetail(BaseModel):
     net_ev: Optional[float] = None
 
 
+class LearningInsight(BaseModel):
+    rate_name: str
+    label: str
+    prior_mean: float
+    posterior_mean: float
+    successes: int
+    failures: int
+    interpretation: str
+
+
 class OverviewResponse(BaseModel):
     total_cases: int
     completed_cases: int
@@ -79,6 +89,7 @@ class OverviewResponse(BaseModel):
     avg_recovery: Optional[float] = None
     posteriors: List[PosteriorItem]
     completed_cases_detail: List[CompletedCaseDetail]
+    learning_insights: List[LearningInsight] = []
 
 
 class SeedResponse(BaseModel):
@@ -128,6 +139,36 @@ RATE_LABELS: dict[str, str] = {
     "default": "Versäumnisrate",
     "settle": "Vergleichsrate",
     "collect": "Inkassorate",
+}
+
+# Display-oriented 3-rate labels for the statistics overview
+DISPLAY_RATE_LABELS: dict[str, str] = {
+    "merit": "Schlüssigkeitsprüfung",
+    "default_settle": "Versäumnis-/Vergleichsrate",
+    "collect": "Inkassorate",
+}
+
+# Event mapping for the 3 display rates
+DISPLAY_RATE_EVENT_MAP: dict[str, dict] = {
+    "merit": {
+        "success": {CaseEventType.SERVICE_OK},
+        "failure": {CaseEventType.SERVICE_FAIL},
+    },
+    "default_settle": {
+        "success": {CaseEventType.DEFAULT, CaseEventType.SETTLED},
+        "failure": {CaseEventType.JUDGMENT_WIN, CaseEventType.JUDGMENT_LOSS},
+    },
+    "collect": {
+        "success": {CaseEventType.PAYMENT_RECEIVED},
+        "failure": {CaseEventType.COLLECTION_FAILED},
+    },
+}
+
+# Default priors for the 3 display rates
+DISPLAY_DEFAULT_PRIORS: dict[str, tuple[float, float]] = {
+    "merit": (7.0, 3.0),           # ~70% base merit/service rate
+    "default_settle": (5.0, 5.0),  # ~50% default-or-settle rate
+    "collect": (6.0, 4.0),         # ~60% collection rate
 }
 
 
@@ -194,6 +235,41 @@ def _compute_net_ev(claim_amount: float, outcome_success: bool) -> float:
         own_costs = court_fees + attorney_costs + service_costs
         opponent_costs = _estimate_opponent_costs(claim_amount)
         return round(-(own_costs + opponent_costs), 2)
+
+
+def _build_insight_text(rate_name: str, prior_mean: float, posterior_mean: float,
+                        successes: int, failures: int) -> str:
+    """Generate a human-readable learning insight for a display rate."""
+    total = successes + failures
+    delta = posterior_mean - prior_mean
+    direction = "gestiegen" if delta > 0 else "gesunken"
+    abs_delta = abs(delta) * 100
+
+    if rate_name == "merit":
+        if total == 0:
+            return "Noch keine Beobachtungen zur Schlüssigkeitsprüfung."
+        return (
+            f"Von {total} geprüften Fällen bestanden {successes} die Schlüssigkeitsprüfung "
+            f"({failures} abgewiesen). Die geschätzte Rate ist von "
+            f"{prior_mean:.0%} auf {posterior_mean:.0%} {direction} ({abs_delta:+.1f} Pp.)."
+        )
+    elif rate_name == "default_settle":
+        if total == 0:
+            return "Noch keine Beobachtungen zur Versäumnis-/Vergleichsrate."
+        return (
+            f"Von {total} zugestellten Fällen endeten {successes} durch Versäumnisurteil oder "
+            f"Vergleich ({failures} gingen in die streitige Verhandlung). "
+            f"Rate: {prior_mean:.0%} → {posterior_mean:.0%} ({abs_delta:+.1f} Pp.)."
+        )
+    elif rate_name == "collect":
+        if total == 0:
+            return "Noch keine Beobachtungen zur Inkassorate."
+        return (
+            f"Von {total} titulierten Forderungen wurden {successes} erfolgreich beigetrieben "
+            f"({failures} scheiterten, z.B. wegen Insolvenz). "
+            f"Rate: {prior_mean:.0%} → {posterior_mean:.0%} ({abs_delta:+.1f} Pp.)."
+        )
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -268,15 +344,26 @@ async def statistics_overview(
     for evts in case_events_map.values():
         flat_events.extend(evts)
 
+    # Use 3 display rates: merit, default_settle, collect
     posteriors: list[PosteriorItem] = []
-    for rate_name in ["served", "default", "settle", "collect"]:
-        prior_alpha, prior_beta = DEFAULT_PRIORS.get(rate_name, (2.0, 2.0))
-        successes, trials = count_events(flat_events, rate_name)
+    learning_insights: list[LearningInsight] = []
+
+    for rate_name in ["merit", "default_settle", "collect"]:
+        prior_alpha, prior_beta = DISPLAY_DEFAULT_PRIORS.get(rate_name, (2.0, 2.0))
+
+        # Count events using display rate event map
+        mapping = DISPLAY_RATE_EVENT_MAP.get(rate_name, {})
+        success_types = mapping.get("success", set())
+        failure_types = mapping.get("failure", set())
+        successes = sum(1 for e in flat_events if e.event_type in success_types)
+        failures = sum(1 for e in flat_events if e.event_type in failure_types)
+        trials = successes + failures
+
         post = bayes_update(prior_alpha, prior_beta, successes, trials)
 
         posteriors.append(PosteriorItem(
             name=rate_name,
-            label=RATE_LABELS.get(rate_name, rate_name),
+            label=DISPLAY_RATE_LABELS.get(rate_name, rate_name),
             prior_alpha=prior_alpha,
             prior_beta=prior_beta,
             successes=successes,
@@ -288,13 +375,26 @@ async def statistics_overview(
             ci_high=post.ci_high,
         ))
 
-    # ── Last 20 completed cases with detail ──
-    # Sort by created_at descending, take 20
-    sorted_completed = sorted(
-        completed_cases_list,
-        key=lambda c: c.created_at or datetime.min,
-        reverse=True,
-    )[:20]
+        # Build learning insight
+        prior_mean = round(prior_alpha / (prior_alpha + prior_beta), 4) if (prior_alpha + prior_beta) > 0 else 0.5
+        interpretation = _build_insight_text(rate_name, prior_mean, round(post.mean, 4), successes, failures)
+        learning_insights.append(LearningInsight(
+            rate_name=rate_name,
+            label=DISPLAY_RATE_LABELS.get(rate_name, rate_name),
+            prior_mean=prior_mean,
+            posterior_mean=round(post.mean, 4),
+            successes=successes,
+            failures=failures,
+            interpretation=interpretation,
+        ))
+
+    # ── Completed cases with detail ──
+    # Non-HIST fictional cases first (always show all), then most recent HIST cases
+    fictional_cases = [c for c in completed_cases_list if not (c.title or "").startswith("[HIST]")]
+    hist_cases = [c for c in completed_cases_list if (c.title or "").startswith("[HIST]")]
+    fictional_sorted = sorted(fictional_cases, key=lambda c: c.created_at or datetime.min, reverse=True)
+    hist_sorted = sorted(hist_cases, key=lambda c: c.created_at or datetime.min, reverse=True)[:15]
+    sorted_completed = fictional_sorted + hist_sorted
 
     # Pre-fetch latest p_cash_success for these cases in one query
     detail_ids = [c.id for c in sorted_completed]
@@ -333,6 +433,7 @@ async def statistics_overview(
         avg_recovery=avg_recovery,
         posteriors=posteriors,
         completed_cases_detail=completed_cases_detail,
+        learning_insights=learning_insights,
     )
 
 
@@ -1009,11 +1110,8 @@ async def update_priors_from_outcomes(
 ):
     """Recalculate Beta priors from ALL completed-case event outcomes.
 
-    For each rate (served, default, settle, collect):
-      1. Count successes and trials from ALL events in the database.
-      2. Compute new_alpha = DEFAULT_alpha + total_successes
-      3. Compute new_beta  = DEFAULT_beta  + total_failures
-      4. Upsert into PriorsConfig (claim_subtype='general', country='*').
+    Updates both the 4 internal rates (served, default, settle, collect) used
+    by the scoring formula AND returns the 3 display rates for the UI.
     """
     try:
         # Load ALL events
@@ -1023,6 +1121,7 @@ async def update_priors_from_outcomes(
         rates_updated: list[str] = []
         priors_items: list[UpdatedPriorItem] = []
 
+        # Update internal 4 rates in PriorsConfig (used by scoring engine)
         for rate_name in ["served", "default", "settle", "collect"]:
             mapping = RATE_EVENT_MAP.get(rate_name, {})
             success_types = mapping.get("success", set())
@@ -1030,7 +1129,6 @@ async def update_priors_from_outcomes(
 
             successes = sum(1 for e in all_events if e.event_type in success_types)
             failures = sum(1 for e in all_events if e.event_type in failure_types)
-            trials = successes + failures
 
             base_alpha, base_beta = DEFAULT_PRIORS.get(rate_name, (2.0, 2.0))
 
@@ -1047,9 +1145,6 @@ async def update_priors_from_outcomes(
             )
             existing = existing_result.scalar_one_or_none()
 
-            old_alpha = existing.alpha if existing else base_alpha
-            old_beta = existing.beta if existing else base_beta
-
             if existing:
                 existing.alpha = new_alpha
                 existing.beta = new_beta
@@ -1063,17 +1158,37 @@ async def update_priors_from_outcomes(
                 )
                 db.add(prior)
 
-            rates_updated.append(rate_name)
+        # Build response with 3 display rates
+        display_rate_labels = {
+            "merit": "Schlüssigkeitsprüfung",
+            "default_settle": "Versäumnis-/Vergleichsrate",
+            "collect": "Inkassorate",
+        }
+        for display_name in ["merit", "default_settle", "collect"]:
+            mapping = DISPLAY_RATE_EVENT_MAP.get(display_name, {})
+            success_types = mapping.get("success", set())
+            failure_types = mapping.get("failure", set())
+
+            successes = sum(1 for e in all_events if e.event_type in success_types)
+            failures = sum(1 for e in all_events if e.event_type in failure_types)
+            trials = successes + failures
+
+            base_alpha, base_beta = DISPLAY_DEFAULT_PRIORS.get(display_name, (2.0, 2.0))
+
+            new_alpha = base_alpha + successes
+            new_beta = base_beta + failures
+
             posterior_mean = (
                 round(new_alpha / (new_alpha + new_beta), 4)
                 if (new_alpha + new_beta) > 0
                 else 0.5
             )
 
+            rates_updated.append(display_name)
             priors_items.append(UpdatedPriorItem(
-                rate_name=rate_name,
-                old_alpha=round(old_alpha, 2),
-                old_beta=round(old_beta, 2),
+                rate_name=display_rate_labels.get(display_name, display_name),
+                old_alpha=round(base_alpha, 2),
+                old_beta=round(base_beta, 2),
                 new_alpha=round(new_alpha, 2),
                 new_beta=round(new_beta, 2),
                 successes=successes,

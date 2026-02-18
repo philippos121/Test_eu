@@ -57,6 +57,35 @@
         </table>
       </section>
 
+      <!-- Learning Insights -->
+      <section class="card fade-in mt-3" v-if="learningInsights.length">
+        <h2>{{ t('stats.learningTitle') }}</h2>
+        <p class="text-secondary mb-2">{{ t('stats.learningDesc') }}</p>
+        <div class="insights-list">
+          <div v-for="insight in learningInsights" :key="insight.rate_name" class="insight-card">
+            <div class="insight-header">
+              <strong>{{ insight.label }}</strong>
+              <div class="insight-delta" :class="insight.posterior_mean >= insight.prior_mean ? 'delta-up' : 'delta-down'">
+                {{ (insight.prior_mean * 100).toFixed(0) }}%
+                &rarr;
+                {{ (insight.posterior_mean * 100).toFixed(0) }}%
+              </div>
+            </div>
+            <div class="insight-bar-row">
+              <div class="insight-bar-bg">
+                <div class="insight-bar-prior" :style="{ width: (insight.prior_mean * 100) + '%' }"></div>
+                <div class="insight-bar-post" :style="{ width: (insight.posterior_mean * 100) + '%' }"></div>
+              </div>
+            </div>
+            <div class="insight-stats text-secondary">
+              {{ insight.successes + insight.failures }} Beobachtungen
+              ({{ insight.successes }} Erfolge, {{ insight.failures }} Misserfolge)
+            </div>
+            <p class="insight-text">{{ insight.interpretation }}</p>
+          </div>
+        </div>
+      </section>
+
       <!-- Recent Completed Cases -->
       <section class="card fade-in mt-2">
         <h2>{{ t('stats.recentCases') }}</h2>
@@ -121,6 +150,7 @@ const { t } = useI18nStore()
 const stats = ref({})
 const posteriors = ref([])
 const completedCases = ref([])
+const learningInsights = ref([])
 const seeding = ref(false)
 const updatingPriors = ref(false)
 const seedMsg = ref('')
@@ -131,6 +161,7 @@ async function loadStats() {
     stats.value = data
     posteriors.value = data.posteriors || []
     completedCases.value = data.completed_cases_detail || []
+    learningInsights.value = data.learning_insights || []
   } catch {
     // Stats endpoint may not exist yet
   }
@@ -237,4 +268,75 @@ onMounted(loadStats)
 
 .success { color: var(--success); font-weight: 600; }
 .danger { color: var(--danger); font-weight: 600; }
+
+/* Learning Insights */
+.insights-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.insight-card {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary, #fafafa);
+}
+
+.insight-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.insight-delta {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.delta-up { color: var(--success); }
+.delta-down { color: var(--danger); }
+
+.insight-bar-row {
+  margin-bottom: 8px;
+}
+
+.insight-bar-bg {
+  position: relative;
+  height: 12px;
+  background: #e0e0e0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.insight-bar-prior {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: rgba(var(--primary-rgb, 25, 118, 210), 0.25);
+  border-radius: 6px;
+}
+
+.insight-bar-post {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: var(--primary);
+  border-radius: 6px;
+  opacity: 0.8;
+}
+
+.insight-stats {
+  font-size: 0.82rem;
+  margin-bottom: 6px;
+}
+
+.insight-text {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  margin: 0;
+}
 </style>
