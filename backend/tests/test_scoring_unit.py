@@ -104,6 +104,23 @@ class TestEvidenceScorer:
         r = score_evidence(case)
         assert r.dunning == 10.0
 
+    def test_claim_not_derivable_forces_zero(self):
+        """If LLM flags claim as not derivable, evidence score must be 0."""
+        case = _mock_case(
+            claim_basis="Kaufvertrag",
+            claim_amount=3000.0,
+            claim_description="Ware geliefert",
+        )
+        facts = {
+            "has_contract": True,
+            "has_written_agreement": True,
+            "has_delivery_proof": True,
+            "claim_not_derivable": True,
+        }
+        r = score_evidence(case, facts)
+        assert r.total == 0.0
+        assert "Kein ableitbarer Anspruch" in r.missing[0]
+
 
 # =====================================================================
 # A2) Logistic evidence→probability mapping

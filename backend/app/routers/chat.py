@@ -199,6 +199,10 @@ def _extract_scoring_facts(update_data: dict, user_text: str = "",
                                       "erneut nicht gezahlt", "mehrfach gemahnt"]):
         facts["repeat_defendant"] = True
 
+    # --- Claim derivability (LLM explicit flag) ---
+    if update_data.get("claim_not_derivable"):
+        facts["claim_not_derivable"] = True
+
     # --- Ability dimension (from conversation + structured data) ---
     if any(kw in all_text for kw in ["insolvent", "insolvenz", "insolvency",
                                       "bankrupt", "zahlungsunfähig",

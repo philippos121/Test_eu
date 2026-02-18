@@ -89,6 +89,12 @@ SCHRITT 2 – SACHVERHALT & RECHTSLAGE (status: case_assessment)
 • Anwendbares Recht bestimmen (Rom-I / Rom-II)
 • Zuständiges Gericht bestimmen (Brüssel-Ia-VO)
 • Prozessaussichten analysieren
+• SCHLÜSSIGKEITSPRÜFUNG: Prüfe, ob sich aus dem Vorbringen des Nutzers \
+  der geltend gemachte Anspruch rechtlich ableiten lässt. Wenn die vorgetragenen \
+  Tatsachen das Begehren unter keinem rechtlichen Gesichtspunkt stützen können \
+  (z.B. kein Vertragsverhältnis, kein Schadensereignis, reiner Nachbarschaftsstreit \
+  ohne zivilrechtlichen Anspruch), setze claim_not_derivable: true im JSON-Block \
+  und erkläre höflich, warum kein durchsetzbarer Anspruch besteht → status: rejected
 
 SCHRITT 3 – BEWEISANGEBOTE (status: evidence_collection)
 • Vorhandene Beweise erfragen: Verträge, Rechnungen, Mahnungen, E-Mails, \
@@ -256,7 +262,8 @@ Alle verfügbaren Felder:
 • Bestätigung (Sek. 11): request_enforcement_certificate, certificate_language
 • Zusatz (Sek. 12): additional_information
 • Recht: applicable_law
-• Bewertung: success_probability (0.0–1.0), applicability_result, assessment_summary
+• Bewertung: success_probability (0.0–1.0), applicability_result, assessment_summary, \
+  claim_not_derivable (true wenn das Vorbringen den Anspruch nicht stützt)
 • Status: status (applicability_check / case_assessment / evidence_collection / \
   form_generation / completed / rejected)
 

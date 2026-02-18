@@ -47,9 +47,19 @@ class EvidenceResult:
 
 
 def score_evidence(case: Case, facts: dict | None = None) -> EvidenceResult:
-    """Rule-based evidence scorer from case fields + extracted LLM facts."""
+    """Rule-based evidence scorer from case fields + extracted LLM facts.
+
+    If the LLM has flagged the claim as not derivable from the facts
+    (claim_not_derivable=True), evidence score is forced to 0.
+    """
     facts = facts or {}
     r = EvidenceResult()
+
+    # Hard stop: if the claim is legally baseless (facts don't support relief),
+    # no amount of documentation can produce a positive evidence score.
+    if facts.get("claim_not_derivable"):
+        r.missing.append("Kein ableitbarer Anspruch aus dem Vorbringen")
+        return r
 
     # --- Contract / Order (0..25) ---
     has_contract = bool(case.claim_basis or facts.get("has_contract"))
@@ -653,8 +663,20 @@ async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
 
     p_cash = compute_p_cash_success(p_served, p_default, p_win_contested, p_settle, p_collect)
 
+    # F2) Hard override: if claim is not derivable from facts, force 0%
+    claim_baseless = bool(merged_facts.get("claim_not_derivable"))
+    if claim_baseless:
+        p_win_contested = 0.0
+        p_cash = 0.0
+
     # G) Drivers
     drivers = compute_drivers(ev, ab, wi, cr, posteriors)
+    if claim_baseless:
+        drivers.insert(0, {
+            "direction": "negative",
+            "factor": "Anspruch nicht ableitbar",
+            "detail": "Das Vorbringen stützt das Begehren rechtlich nicht — 0% Obsiegenswahrscheinlichkeit",
+        })
 
     # Persist
     score = CaseProcessScore(
