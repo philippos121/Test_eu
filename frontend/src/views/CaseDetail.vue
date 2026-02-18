@@ -2,14 +2,14 @@
   <div class="page">
     <div class="container">
       <div v-if="!caseStore.currentCase" class="text-center mt-3">
-        <p class="loading-dots text-secondary">Fall wird geladen</p>
+        <p class="loading-dots text-secondary">{{ t('dashboard.loading') }}</p>
       </div>
 
       <template v-else>
         <!-- Case Header -->
         <div class="case-header fade-in">
           <div class="case-header-left">
-            <router-link to="/" class="back-link">&larr; Zurück</router-link>
+            <router-link to="/" class="back-link">&larr; {{ t('case.back') }}</router-link>
             <h1>{{ caseStore.currentCase.title }}</h1>
           </div>
           <span :class="['badge', `badge-${caseStore.currentCase.status}`]">
@@ -22,7 +22,7 @@
           <aside class="case-sidebar fade-in">
             <!-- Progress Stepper -->
             <div class="card mb-2">
-              <h3 class="sidebar-title">Fortschritt</h3>
+              <h3 class="sidebar-title">{{ t('case.progress') }}</h3>
               <div class="stepper">
                 <div
                   v-for="(step, i) in steps"
@@ -40,57 +40,57 @@
 
             <!-- Case Details -->
             <div class="card mb-2">
-              <h3 class="sidebar-title">Falldaten (Formblatt A)</h3>
+              <h3 class="sidebar-title">{{ t('case.formAData') }}</h3>
               <dl class="detail-list">
                 <template v-if="caseStore.currentCase.court_name">
-                  <dt>Gericht (Sek. 1)</dt>
+                  <dt>{{ t('case.court') }}</dt>
                   <dd>{{ caseStore.currentCase.court_name }}</dd>
                 </template>
                 <template v-if="caseStore.currentCase.claimant_name">
-                  <dt>Kläger (Sek. 2)</dt>
+                  <dt>{{ t('case.claimant') }}</dt>
                   <dd>{{ caseStore.currentCase.claimant_name }}</dd>
                 </template>
                 <template v-if="caseStore.currentCase.claimant_country">
-                  <dt>Kläger-Land</dt>
+                  <dt>{{ t('case.claimantCountry') }}</dt>
                   <dd>{{ caseStore.currentCase.claimant_country }}</dd>
                 </template>
                 <template v-if="caseStore.currentCase.defendant_name">
-                  <dt>Beklagter (Sek. 3)</dt>
+                  <dt>{{ t('case.defendant') }}</dt>
                   <dd>{{ caseStore.currentCase.defendant_name }}</dd>
                 </template>
                 <template v-if="caseStore.currentCase.defendant_country">
-                  <dt>Beklagter-Land</dt>
+                  <dt>{{ t('case.defendantCountry') }}</dt>
                   <dd>{{ caseStore.currentCase.defendant_country }}</dd>
                 </template>
                 <template v-if="caseStore.currentCase.jurisdiction_basis">
-                  <dt>Zuständigkeit (Sek. 4)</dt>
+                  <dt>{{ t('case.jurisdiction') }}</dt>
                   <dd>{{ caseStore.currentCase.jurisdiction_basis }}</dd>
                 </template>
                 <template v-if="caseStore.currentCase.is_cross_border != null">
-                  <dt>Grenzüberschr. (Sek. 5)</dt>
-                  <dd>{{ caseStore.currentCase.is_cross_border ? 'Ja' : 'Nein' }}</dd>
+                  <dt>{{ t('case.crossBorder') }}</dt>
+                  <dd>{{ caseStore.currentCase.is_cross_border ? t('case.yes') : t('case.no') }}</dd>
                 </template>
                 <template v-if="caseStore.currentCase.claim_amount">
-                  <dt>Streitwert (Sek. 7)</dt>
+                  <dt>{{ t('case.amount') }}</dt>
                   <dd>{{ caseStore.currentCase.claim_amount.toFixed(2) }} {{ caseStore.currentCase.claim_currency || 'EUR' }}</dd>
                 </template>
                 <template v-if="caseStore.currentCase.applicable_law">
-                  <dt>Anwendb. Recht</dt>
+                  <dt>{{ t('case.applicableLaw') }}</dt>
                   <dd>{{ caseStore.currentCase.applicable_law }}</dd>
                 </template>
                 <template v-if="displayProbability != null">
-                  <dt>Erfolgsaussicht</dt>
+                  <dt>{{ t('case.successProspect') }}</dt>
                   <dd>
                     <a href="#score-panel" class="score-link" @click.prevent="toggleScorePanel">
                       <span :class="probabilityClass(displayProbability)">
                         {{ (displayProbability * 100).toFixed(0) }}%
                       </span>
-                      <span class="score-link-detail">Details &#9662;</span>
+                      <span class="score-link-detail">{{ t('case.details') }} &#9662;</span>
                     </a>
                   </dd>
                 </template>
                 <template v-if="caseStore.currentCase.applicability_result">
-                  <dt>Anwendbarkeit</dt>
+                  <dt>{{ t('case.applicability') }}</dt>
                   <dd>{{ caseStore.currentCase.applicability_result }}</dd>
                 </template>
               </dl>
@@ -98,10 +98,10 @@
 
             <!-- Erfolgswahrscheinlichkeit Panel -->
             <div v-if="showScorePanel" id="score-panel" class="card mb-2 score-panel fade-in">
-              <h3 class="sidebar-title">Erfolgswahrscheinlichkeit</h3>
+              <h3 class="sidebar-title">{{ t('case.successProspect') }}</h3>
 
               <div v-if="!score" class="text-secondary" style="font-size:0.82rem;">
-                Noch keine detaillierte Berechnung vorhanden.
+                {{ t('case.noDetailedCalc') }}
               </div>
 
               <template v-else>
@@ -110,12 +110,12 @@
                   <div class="score-hero-val" :class="pcashClass(score.p_cash_success)">
                     {{ (score.p_cash_success * 100).toFixed(1) }}%
                   </div>
-                  <div class="score-hero-label">Gesamt: "Am Ende bezahlt"</div>
+                  <div class="score-hero-label">{{ t('case.totalProbability') }}</div>
                 </div>
 
                 <!-- 5 Teilwahrscheinlichkeiten -->
                 <div class="score-section">
-                  <div class="score-section-title">Teilwahrscheinlichkeiten</div>
+                  <div class="score-section-title">{{ t('case.subProbabilities') }}</div>
                   <div v-for="p in probItems" :key="p.key" class="mini-prob-row">
                     <span class="mini-prob-label">{{ p.label }}</span>
                     <div class="mini-prob-bar-wrap">
@@ -127,27 +127,27 @@
 
                 <!-- Scores -->
                 <div class="score-section">
-                  <div class="score-section-title">Bewertungen</div>
+                  <div class="score-section-title">{{ t('case.scores') }}</div>
                   <div class="score-row">
-                    <span>Beweislage</span>
+                    <span>{{ t('case.evidenceScore') }}</span>
                     <span :class="scoreColor(score.evidence_score)">{{ score.evidence_score.toFixed(0) }}/100</span>
                   </div>
                   <div v-if="score.evidence_breakdown.missing?.length" class="score-missing">
-                    Fehlend: {{ score.evidence_breakdown.missing.join(', ') }}
+                    {{ t('case.missingLabel') }}: {{ score.evidence_breakdown.missing.join(', ') }}
                   </div>
                   <div class="score-row">
-                    <span>Zahlungsfähigkeit</span>
+                    <span>{{ t('case.abilityScore') }}</span>
                     <span :class="scoreColor(score.ability_score)">{{ score.ability_score.toFixed(0) }}/100</span>
                   </div>
                   <div class="score-row">
-                    <span>Zahlungswilligkeit</span>
+                    <span>{{ t('case.willingnessScore') }}</span>
                     <span :class="scoreColor(score.willingness_score)">{{ score.willingness_score.toFixed(0) }}/100</span>
                   </div>
                 </div>
 
                 <!-- Wie kam der Score zustande? -->
                 <div v-if="score.drivers_json?.length" class="score-section">
-                  <div class="score-section-title">Wie kam der Score zustande?</div>
+                  <div class="score-section-title">{{ t('case.driversTitle') }}</div>
                   <div v-for="(d, i) in score.drivers_json" :key="i" :class="['score-driver', `score-driver-${d.direction}`]">
                     <span class="score-driver-icon">{{ d.direction === 'positive' ? '+' : '&minus;' }}</span>
                     <div>
@@ -157,16 +157,55 @@
                   </div>
                 </div>
 
+                <!-- Expected Value -->
+                <div v-if="caseStore.currentCase.claim_amount && score.p_cash_success" class="score-section">
+                  <div class="score-section-title">{{ t('case.expectedValue') }}</div>
+                  <div class="ev-mini">
+                    <div class="ev-row">
+                      <span>{{ t('case.evClaimAmount') }}</span>
+                      <span>{{ caseStore.currentCase.claim_amount.toFixed(2) }} EUR</span>
+                    </div>
+                    <div class="ev-row">
+                      <span>{{ t('case.evSuccessProb') }}</span>
+                      <span>{{ (score.p_cash_success * 100).toFixed(1) }}%</span>
+                    </div>
+                    <div class="ev-row">
+                      <span>{{ t('case.evExpectedPayment') }}</span>
+                      <span>{{ expectedPayment.toFixed(2) }} EUR</span>
+                    </div>
+                    <div class="ev-row ev-cost">
+                      <span>{{ t('case.evCourtFees') }}</span>
+                      <span class="danger">-{{ courtFees.toFixed(2) }} EUR</span>
+                    </div>
+                    <div class="ev-row ev-cost">
+                      <span>{{ t('case.evServiceCosts') }}</span>
+                      <span class="danger">-75.00 EUR</span>
+                    </div>
+                    <div class="ev-row ev-cost">
+                      <span>{{ t('case.evCommission') }}</span>
+                      <span class="danger">-{{ commission.toFixed(2) }} EUR</span>
+                    </div>
+                    <div class="ev-row ev-total">
+                      <span><strong>{{ t('case.evNetExpected') }}</strong></span>
+                      <span :class="netEv >= 0 ? 'success' : 'danger'"><strong>{{ netEv.toFixed(2) }} EUR</strong></span>
+                    </div>
+                    <div class="ev-row ev-note">
+                      <span>{{ t('case.evIfLoss') }}</span>
+                      <span class="success">{{ t('case.evPortalCovers') }}</span>
+                    </div>
+                  </div>
+                </div>
+
                 <!-- Bayes-Update -->
                 <div class="score-section">
-                  <div class="score-section-title">Bayes-Update: Prior &rarr; Posterior</div>
+                  <div class="score-section-title">{{ t('case.bayesUpdate') }}</div>
                   <table class="bayes-mini">
                     <thead>
                       <tr>
-                        <th>Rate</th>
-                        <th>&alpha;/&beta;</th>
-                        <th>s/n</th>
-                        <th>p&#770;</th>
+                        <th>{{ t('case.rate') }}</th>
+                        <th>{{ t('case.alphaBeta') }}</th>
+                        <th>{{ t('case.successTrials') }}</th>
+                        <th>{{ t('case.estimate') }}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -181,16 +220,16 @@
                 </div>
 
                 <div class="score-meta text-secondary">
-                  Modell {{ score.model_version }} &middot; {{ formatDate(score.created_at) }}
+                  {{ t('case.model') }} {{ score.model_version }} &middot; {{ formatDate(score.created_at) }}
                 </div>
               </template>
             </div>
 
             <!-- Documents -->
-            <div class="card">
-              <h3 class="sidebar-title">Dokumente</h3>
+            <div class="card mb-2">
+              <h3 class="sidebar-title">{{ t('case.documents') }}</h3>
               <div v-if="caseStore.documents.length === 0" class="text-secondary" style="font-size:0.85rem;">
-                Noch keine Dokumente vorhanden.
+                {{ t('case.noDocuments') }}
               </div>
               <div v-for="doc in caseStore.documents" :key="doc.id" class="doc-item">
                 <span class="doc-icon">&#128196;</span>
@@ -203,7 +242,7 @@
                   class="btn btn-sm btn-outline"
                   target="_blank"
                 >
-                  Download
+                  {{ t('case.download') }}
                 </a>
               </div>
               <button
@@ -212,8 +251,32 @@
                 :disabled="generatingForm"
                 @click="handleGenerateForm"
               >
-                {{ generatingForm ? 'Wird erstellt...' : 'Formblatt A erstellen' }}
+                {{ generatingForm ? t('case.generating') : t('case.generateFormA') }}
               </button>
+            </div>
+
+            <!-- Court Document Upload -->
+            <div class="card" v-if="caseStore.currentCase.status === 'form_generation' || caseStore.currentCase.status === 'completed'">
+              <h3 class="sidebar-title">{{ t('case.courtDocTitle') }}</h3>
+              <p class="text-secondary" style="font-size:0.82rem;margin-bottom:12px;">
+                {{ t('case.courtDocDesc') }}
+              </p>
+              <div class="court-upload-area">
+                <input
+                  type="file"
+                  ref="courtDocInput"
+                  @change="handleCourtDocUpload"
+                  accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                  style="display:none;"
+                />
+                <button
+                  class="btn btn-primary btn-block"
+                  @click="$refs.courtDocInput.click()"
+                  :disabled="uploadingCourtDoc"
+                >
+                  {{ uploadingCourtDoc ? t('case.uploading') : t('case.uploadBtn') }}
+                </button>
+              </div>
             </div>
           </aside>
 
@@ -232,7 +295,7 @@
                 <div class="message-body">
                   <div class="message-meta">
                     <span class="message-sender">
-                      {{ msg.role === 'user' ? 'Sie' : 'KI-Assistent' }}
+                      {{ msg.role === 'user' ? t('case.you') : t('case.aiAssistant') }}
                     </span>
                     <span class="message-time text-secondary">{{ formatTime(msg.created_at) }}</span>
                   </div>
@@ -244,10 +307,10 @@
                 <div class="message-avatar"><img :src="logoUrl" alt="AI" class="avatar-logo" /></div>
                 <div class="message-body">
                   <div class="message-meta">
-                    <span class="message-sender">KI-Assistent</span>
+                    <span class="message-sender">{{ t('case.aiAssistant') }}</span>
                   </div>
                   <div class="message-content">
-                    <span class="loading-dots">Analysiert</span>
+                    <span class="loading-dots">{{ t('case.analyzing') }}</span>
                   </div>
                 </div>
               </div>
@@ -260,7 +323,7 @@
                   v-model="messageText"
                   class="chat-input"
                   rows="3"
-                  placeholder="Schreiben Sie hier Ihre Nachricht..."
+                  :placeholder="t('case.writeMessage')"
                   @keydown.enter.exact.prevent="handleSend"
                   :disabled="caseStore.loading"
                 ></textarea>
@@ -269,12 +332,12 @@
                   class="btn btn-primary send-btn"
                   :disabled="!messageText.trim() || caseStore.loading"
                 >
-                  Senden &rarr;
+                  {{ t('case.send') }} &rarr;
                 </button>
               </form>
             </div>
             <div v-else class="chat-closed">
-              <p>Dieser Fall ist <strong>{{ statusLabel(caseStore.currentCase.status) }}</strong>.</p>
+              <p>{{ t('case.caseClosed') }} <strong>{{ statusLabel(caseStore.currentCase.status) }}</strong>.</p>
             </div>
           </main>
         </div>
@@ -287,17 +350,21 @@
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useCaseStore } from '../stores/case'
+import { useI18nStore } from '../stores/i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import logoUrl from '../assets/images/logo.svg'
 
 const route = useRoute()
 const caseStore = useCaseStore()
+const { t } = useI18nStore()
 
 const messageText = ref('')
 const chatContainer = ref(null)
 const generatingForm = ref(false)
 const showScorePanel = ref(false)
+const uploadingCourtDoc = ref(false)
+const courtDocInput = ref(null)
 
 const caseId = computed(() => route.params.id)
 
@@ -310,24 +377,26 @@ const canGenerateForm = computed(() =>
   caseStore.currentCase?.status === 'completed'
 )
 
-const steps = [
-  { key: 'intake', label: 'Aufnahme' },
-  { key: 'applicability_check', label: 'Anwendbarkeit' },
-  { key: 'case_assessment', label: 'Fallprüfung' },
-  { key: 'evidence_collection', label: 'Beweisaufnahme' },
-  { key: 'form_generation', label: 'Formular' },
-  { key: 'completed', label: 'Abgeschlossen' },
-]
+const steps = computed(() => [
+  { key: 'intake', label: t('status.intake') },
+  { key: 'applicability_check', label: t('status.applicability_check') },
+  { key: 'case_assessment', label: t('status.case_assessment') },
+  { key: 'evidence_collection', label: t('status.evidence_collection') },
+  { key: 'form_generation', label: t('status.form_generation') },
+  { key: 'completed', label: t('status.completed') },
+])
 
-const stepOrder = Object.fromEntries(steps.map((s, i) => [s.key, i]))
+const stepOrder = computed(() =>
+  Object.fromEntries(steps.value.map((s, i) => [s.key, i]))
+)
 
 function isStepActive(key) {
   return caseStore.currentCase?.status === key
 }
 
 function isStepDone(key) {
-  const current = stepOrder[caseStore.currentCase?.status] ?? -1
-  return stepOrder[key] < current
+  const current = stepOrder.value[caseStore.currentCase?.status] ?? -1
+  return stepOrder.value[key] < current
 }
 
 onMounted(async () => {
@@ -348,7 +417,6 @@ async function handleSend() {
   const text = messageText.value.trim()
   if (!text) return
   messageText.value = ''
-  // Optimistic UI: add user message immediately
   caseStore.messages.push({
     id: 'temp-' + Date.now(),
     role: 'user',
@@ -357,7 +425,6 @@ async function handleSend() {
   })
   nextTick(scrollToBottom)
   await caseStore.sendMessage(caseId.value, text)
-  // Refresh documents and score after each message
   await Promise.all([
     caseStore.fetchDocuments(caseId.value),
     caseStore.fetchScore(caseId.value),
@@ -372,6 +439,19 @@ async function handleGenerateForm() {
     await caseStore.fetchCase(caseId.value)
   } finally {
     generatingForm.value = false
+  }
+}
+
+async function handleCourtDocUpload(event) {
+  const file = event.target.files[0]
+  if (!file) return
+  uploadingCourtDoc.value = true
+  try {
+    await caseStore.uploadDocument(caseId.value, file, 'court_document')
+    await caseStore.fetchDocuments(caseId.value)
+  } finally {
+    uploadingCourtDoc.value = false
+    if (courtDocInput.value) courtDocInput.value.value = ''
   }
 }
 
@@ -400,18 +480,8 @@ function formatDate(dateStr) {
   })
 }
 
-const STATUS_LABELS = {
-  intake: 'Aufnahme',
-  applicability_check: 'Anwendbarkeitsprüfung',
-  case_assessment: 'Fallprüfung',
-  evidence_collection: 'Beweisaufnahme',
-  form_generation: 'Formularerstellung',
-  completed: 'Abgeschlossen',
-  rejected: 'Abgelehnt',
-}
-
 function statusLabel(status) {
-  return STATUS_LABELS[status] || status
+  return t(`status.${status}`) || status
 }
 
 function probabilityClass(p) {
@@ -423,7 +493,6 @@ function probabilityClass(p) {
 // --- Score panel ---
 const score = computed(() => caseStore.processScore)
 
-// Use process score p_cash_success if available, fall back to LLM-set success_probability
 const displayProbability = computed(() => {
   if (score.value?.p_cash_success != null) return score.value.p_cash_success
   return caseStore.currentCase?.success_probability ?? null
@@ -439,16 +508,21 @@ async function toggleScorePanel() {
 const probItems = computed(() => {
   if (!score.value) return []
   return [
-    { key: 'served', label: 'Zustellung', value: score.value.p_served },
-    { key: 'default', label: 'Versäumnis', value: score.value.p_default },
-    { key: 'win', label: 'Gewinn b. Bestreitung', value: score.value.p_win_contested },
-    { key: 'settle', label: 'Vergleich', value: score.value.p_settle },
-    { key: 'collect', label: 'Inkasso', value: score.value.p_collect },
+    { key: 'served', label: t('case.served'), value: score.value.p_served },
+    { key: 'default', label: t('case.defaultRate'), value: score.value.p_default },
+    { key: 'win', label: t('case.winContested'), value: score.value.p_win_contested },
+    { key: 'settle', label: t('case.settle'), value: score.value.p_settle },
+    { key: 'collect', label: t('case.collect'), value: score.value.p_collect },
   ]
 })
 
 const bayesRates = ['served', 'default', 'settle', 'collect']
-const rateLabels = { served: 'Zustellung', default: 'Versäumnis', settle: 'Vergleich', collect: 'Inkasso' }
+const rateLabels = computed(() => ({
+  served: t('case.served'),
+  default: t('case.defaultRate'),
+  settle: t('case.settle'),
+  collect: t('case.collect'),
+}))
 
 function priors(rate) { return score.value?.priors_json?.[rate] || { alpha: 0, beta: 0 } }
 function obs(rate) { return score.value?.observations_json?.[rate] || { successes: 0, trials: 0 } }
@@ -465,6 +539,23 @@ function scoreColor(s) {
   if (s >= 35) return 'prob-medium'
   return 'prob-low'
 }
+
+// --- Expected Value ---
+const expectedPayment = computed(() => {
+  if (!score.value || !caseStore.currentCase?.claim_amount) return 0
+  return caseStore.currentCase.claim_amount * score.value.p_cash_success
+})
+
+const courtFees = computed(() => {
+  const amount = caseStore.currentCase?.claim_amount || 0
+  return Math.max(35, amount * 0.035)
+})
+
+const commission = computed(() => expectedPayment.value * 0.3)
+
+const netEv = computed(() =>
+  expectedPayment.value - courtFees.value - 75 - commission.value
+)
 </script>
 
 <style scoped>
@@ -866,4 +957,38 @@ function scoreColor(s) {
 }
 
 .score-meta { font-size: 0.7rem; text-align: right; margin-top: 8px; }
+
+/* Expected Value mini */
+.ev-mini {
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+.ev-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.82rem;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+.ev-row.ev-cost { font-size: 0.78rem; }
+.ev-row.ev-total {
+  border-top: 2px solid var(--primary);
+  border-bottom: none;
+  padding-top: 8px;
+  font-size: 0.9rem;
+}
+.ev-row.ev-note {
+  border-bottom: none;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  padding-top: 8px;
+}
+.success { color: var(--success); font-weight: 600; }
+.danger { color: var(--danger); font-weight: 600; }
+
+/* Court doc upload */
+.court-upload-area {
+  padding: 8px 0;
+}
 </style>

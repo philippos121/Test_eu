@@ -1,12 +1,15 @@
+import os
+import uuid as uuid_mod
 from typing import List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import get_current_user, get_current_user_from_token_or_query
+from ..config import get_settings
 from ..database import get_db
 from ..models import Case, CaseStatus, ChatMessage, Document, MessageRole, User
 from ..schemas import DocumentRead
@@ -79,6 +82,46 @@ async def generate_form(
     )
     db.add(msg)
     case.status = CaseStatus.COMPLETED
+    await db.commit()
+    await db.refresh(doc)
+    return doc
+
+
+@router.post("/upload", response_model=DocumentRead, status_code=201)
+async def upload_court_document(
+    case_id: UUID,
+    file: UploadFile = File(...),
+    doc_type: str = Form("court_document"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload a court document (e.g., service confirmation, judgment, enforcement order)."""
+    result = await db.execute(
+        select(Case).where(Case.id == case_id, Case.user_id == user.id)
+    )
+    case = result.scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail="Fall nicht gefunden.")
+
+    settings = get_settings()
+    upload_dir = os.path.join(settings.generated_forms_dir, "court_docs")
+    os.makedirs(upload_dir, exist_ok=True)
+
+    ext = os.path.splitext(file.filename)[1] if file.filename else ".pdf"
+    safe_filename = f"{uuid_mod.uuid4().hex}{ext}"
+    filepath = os.path.join(upload_dir, safe_filename)
+
+    content = await file.read()
+    with open(filepath, "wb") as f:
+        f.write(content)
+
+    doc = Document(
+        case_id=case.id,
+        filename=file.filename or safe_filename,
+        filepath=filepath,
+        doc_type=doc_type,
+    )
+    db.add(doc)
     await db.commit()
     await db.refresh(doc)
     return doc

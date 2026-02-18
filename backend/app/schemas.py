@@ -334,3 +334,78 @@ class AdminCaseListItem(BaseModel):
     created_at: datetime
     updated_at: datetime
     user_email: Optional[str] = None
+
+
+# --- Statistics / Bayesian Learning ---
+
+class CompletedCaseRead(BaseModel):
+    """A completed case with its outcome summary."""
+    id: UUID
+    title: str
+    status: CaseStatus
+    claimant_name: Optional[str] = None
+    defendant_name: Optional[str] = None
+    claimant_country: Optional[str] = None
+    defendant_country: Optional[str] = None
+    claim_amount: Optional[float] = None
+    claim_currency: Optional[str] = None
+    outcome: str  # e.g. "full_payment", "partial_payment", "settled", "abandoned"
+    events: list[CaseEventRead] = []
+    p_cash_success: Optional[float] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class HistoricalAggregate(BaseModel):
+    """Aggregate counts from historical completed cases."""
+    total_cases: int
+    served_success: int
+    served_fail: int
+    default_count: int
+    responded_count: int
+    settled_count: int
+    judgment_win: int
+    judgment_loss: int
+    payment_received: int
+    collection_failed: int
+
+
+class StatisticsOverview(BaseModel):
+    """Aggregate statistics for the admin dashboard."""
+    total_completed_cases: int
+    total_events: int
+    outcome_distribution: dict  # e.g. {"full_payment": 5, "partial": 3, ...}
+    rate_summaries: dict  # e.g. {"served": {"successes": 70, "trials": 100, "rate": 0.70}, ...}
+    historical_cases_loaded: int
+    current_priors: list[PriorsConfigRead] = []
+
+
+class PriorUpdateResult(BaseModel):
+    """Result of recalculating priors from completed case outcomes."""
+    rates_updated: list[str]
+    details: dict  # rate_name -> {old_alpha, old_beta, new_alpha, new_beta, observations}
+
+
+class SeedResult(BaseModel):
+    """Result of seeding demo data."""
+    fictional_cases_created: int
+    historical_aggregate_events_created: int
+    message: str
+
+
+class ExpectedValueResult(BaseModel):
+    """Expected value calculation for a case."""
+    case_id: UUID
+    claim_amount: float
+    claim_currency: str
+    p_cash_success: float
+    expected_recovery: float
+    court_fees: float
+    service_fees: float
+    commission: float
+    net_expected_value: float
+    recommendation: str  # "empfohlen" / "riskant" / "nicht empfohlen"
+    recommendation_reason: str
+    breakdown: dict

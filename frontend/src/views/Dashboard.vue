@@ -4,40 +4,42 @@
       <!-- Welcome Section -->
       <section class="welcome-section fade-in">
         <div class="welcome-content">
-          <h1>Willkommen, {{ auth.user?.full_name || 'Nutzer' }}</h1>
-          <p>
-            Verwalten Sie Ihre EU-Bagatellverfahren und lassen Sie sich von
-            unserem KI-Assistenten durch das Verfahren leiten.
-          </p>
+          <h1>{{ t('dashboard.welcome') }}, {{ auth.user?.full_name || 'Nutzer' }}</h1>
+          <p>{{ t('dashboard.welcomeText') }}</p>
         </div>
-        <button class="btn btn-accent btn-lg" @click="showNewCaseDialog = true">
-          + Neuen Fall anlegen
-        </button>
+        <div class="welcome-actions">
+          <button class="btn btn-accent btn-lg" @click="showNewCaseDialog = true">
+            {{ t('dashboard.newCase') }}
+          </button>
+          <router-link to="/project" class="btn btn-outline btn-lg" style="color:white;border-color:rgba(255,255,255,0.5);">
+            {{ t('dashboard.projectDescription') }}
+          </router-link>
+        </div>
       </section>
 
       <!-- Process Overview -->
       <section class="process-overview card fade-in mt-3">
-        <h2 class="mb-2">So funktioniert es</h2>
+        <h2 class="mb-2">{{ t('dashboard.howItWorks') }}</h2>
         <div class="process-steps">
           <div class="step">
             <div class="step-number">1</div>
-            <h3>Anwendbarkeit prüfen</h3>
-            <p>Der KI-Assistent prüft, ob Ihr Fall für das EU-Bagatellverfahren geeignet ist.</p>
+            <h3>{{ t('dashboard.step1Title') }}</h3>
+            <p>{{ t('dashboard.step1Desc') }}</p>
           </div>
           <div class="step">
             <div class="step-number">2</div>
-            <h3>Sachverhalt schildern</h3>
-            <p>Schildern Sie den Sachverhalt detailliert und geben Sie Ihre Beweismittel an.</p>
+            <h3>{{ t('dashboard.step2Title') }}</h3>
+            <p>{{ t('dashboard.step2Desc') }}</p>
           </div>
           <div class="step">
             <div class="step-number">3</div>
-            <h3>Prozessaussichten</h3>
-            <p>Erhalten Sie eine Einschätzung Ihrer Erfolgsaussichten basierend auf der Rechtslage.</p>
+            <h3>{{ t('dashboard.step3Title') }}</h3>
+            <p>{{ t('dashboard.step3Desc') }}</p>
           </div>
           <div class="step">
             <div class="step-number">4</div>
-            <h3>Formular erstellen</h3>
-            <p>Bei positiver Prognose wird das Klageformblatt A automatisch für Sie ausgefüllt.</p>
+            <h3>{{ t('dashboard.step4Title') }}</h3>
+            <p>{{ t('dashboard.step4Desc') }}</p>
           </div>
         </div>
       </section>
@@ -45,24 +47,22 @@
       <!-- Cases List -->
       <section class="cases-section mt-3 fade-in">
         <div class="card-header">
-          <h2>Meine Fälle</h2>
+          <h2>{{ t('dashboard.myCases') }}</h2>
           <span class="text-secondary" v-if="caseStore.cases.length">
-            {{ caseStore.cases.length }} {{ caseStore.cases.length === 1 ? 'Fall' : 'Fälle' }}
+            {{ caseStore.cases.length }} {{ caseStore.cases.length === 1 ? t('dashboard.caseCount') : t('dashboard.casesCount') }}
           </span>
         </div>
 
         <div v-if="caseStore.loading" class="text-center mt-3">
-          <p class="loading-dots text-secondary">Laden</p>
+          <p class="loading-dots text-secondary">{{ t('dashboard.loading') }}</p>
         </div>
 
         <div v-else-if="caseStore.cases.length === 0" class="empty-state">
           <div class="empty-icon">&#128221;</div>
-          <h3>Noch keine Fälle</h3>
-          <p class="text-secondary">
-            Legen Sie Ihren ersten Fall an, um mit dem EU-Bagatellverfahren zu beginnen.
-          </p>
+          <h3>{{ t('dashboard.noCases') }}</h3>
+          <p class="text-secondary">{{ t('dashboard.noCasesText') }}</p>
           <button class="btn btn-primary mt-2" @click="showNewCaseDialog = true">
-            Ersten Fall anlegen
+            {{ t('dashboard.createFirst') }}
           </button>
         </div>
 
@@ -79,20 +79,20 @@
             </div>
             <div class="case-card-details">
               <p v-if="c.claim_amount">
-                <strong>Streitwert:</strong> {{ c.claim_amount.toFixed(2) }} {{ c.claim_currency || 'EUR' }}
+                <strong>{{ t('dashboard.claimAmount') }}:</strong> {{ c.claim_amount.toFixed(2) }} {{ c.claim_currency || 'EUR' }}
               </p>
               <p v-if="c.defendant_name">
-                <strong>Beklagter:</strong> {{ c.defendant_name }}
+                <strong>{{ t('dashboard.defendant') }}:</strong> {{ c.defendant_name }}
               </p>
               <p v-if="c.success_probability != null">
-                <strong>Erfolgswahrscheinlichkeit:</strong>
+                <strong>{{ t('dashboard.successProbability') }}:</strong>
                 <span :class="probabilityClass(c.success_probability)">
                   {{ (c.success_probability * 100).toFixed(0) }}%
                 </span>
               </p>
             </div>
             <div class="case-card-footer text-secondary">
-              Erstellt am {{ formatDate(c.created_at) }}
+              {{ t('dashboard.createdOn') }} {{ formatDate(c.created_at) }}
             </div>
           </div>
         </div>
@@ -101,29 +101,27 @@
       <!-- New Case Modal -->
       <div v-if="showNewCaseDialog" class="modal-overlay" @click.self="showNewCaseDialog = false">
         <div class="modal-content card fade-in">
-          <h2>Neuen Fall anlegen</h2>
-          <p class="text-secondary mb-2">
-            Geben Sie eine kurze Bezeichnung für Ihren Fall an.
-          </p>
+          <h2>{{ t('dashboard.createCaseTitle') }}</h2>
+          <p class="text-secondary mb-2">{{ t('dashboard.createCaseText') }}</p>
           <form @submit.prevent="handleCreateCase">
             <div class="form-group">
-              <label for="caseTitle">Fallbezeichnung</label>
+              <label for="caseTitle">{{ t('dashboard.caseLabel') }}</label>
               <input
                 id="caseTitle"
                 v-model="newCaseTitle"
                 type="text"
                 class="form-control"
-                placeholder="z.B. Forderung gegen Firma XY - Unbezahlte Rechnung"
+                :placeholder="t('dashboard.casePlaceholder')"
                 required
                 autofocus
               />
             </div>
             <div class="flex gap-1" style="justify-content: flex-end;">
               <button type="button" class="btn btn-outline" @click="showNewCaseDialog = false">
-                Abbrechen
+                {{ t('dashboard.cancel') }}
               </button>
               <button type="submit" class="btn btn-primary" :disabled="creatingCase">
-                {{ creatingCase ? 'Wird erstellt...' : 'Fall anlegen' }}
+                {{ creatingCase ? t('dashboard.creating') : t('dashboard.createCase') }}
               </button>
             </div>
           </form>
@@ -138,9 +136,11 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useCaseStore } from '../stores/case'
+import { useI18nStore } from '../stores/i18n'
 
 const auth = useAuthStore()
 const caseStore = useCaseStore()
+const { t } = useI18nStore()
 const router = useRouter()
 
 const showNewCaseDialog = ref(false)
@@ -163,18 +163,8 @@ async function handleCreateCase() {
   }
 }
 
-const STATUS_LABELS = {
-  intake: 'Aufnahme',
-  applicability_check: 'Anwendbarkeitsprüfung',
-  case_assessment: 'Fallprüfung',
-  evidence_collection: 'Beweisaufnahme',
-  form_generation: 'Formularerstellung',
-  completed: 'Abgeschlossen',
-  rejected: 'Abgelehnt',
-}
-
 function statusLabel(status) {
-  return STATUS_LABELS[status] || status
+  return t(`status.${status}`) || status
 }
 
 function formatDate(dateStr) {
@@ -214,6 +204,12 @@ function probabilityClass(p) {
   opacity: 0.85;
   font-size: 0.95rem;
   max-width: 500px;
+}
+
+.welcome-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 /* Process Steps */

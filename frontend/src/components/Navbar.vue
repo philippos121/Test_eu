@@ -7,13 +7,15 @@
       </router-link>
 
       <nav class="navbar-links">
-        <router-link to="/" class="nav-link">Meine Fälle</router-link>
-        <router-link v-if="auth.user?.is_admin" to="/admin" class="nav-link">Admin</router-link>
+        <router-link to="/" class="nav-link">{{ t('nav.myCases') }}</router-link>
+        <router-link to="/statistics" class="nav-link">{{ t('nav.statistics') }}</router-link>
+        <router-link v-if="auth.user?.is_admin" to="/admin" class="nav-link">{{ t('nav.admin') }}</router-link>
       </nav>
 
       <div class="navbar-user">
+        <LanguageSelector />
         <span class="user-name" v-if="auth.user">{{ auth.user.full_name }}</span>
-        <button class="btn btn-sm btn-outline" @click="handleLogout">Abmelden</button>
+        <button class="btn btn-sm btn-outline" @click="handleLogout">{{ t('nav.logout') }}</button>
       </div>
     </div>
   </header>
@@ -22,9 +24,12 @@
 <script setup>
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { useI18nStore } from '../stores/i18n'
+import LanguageSelector from './LanguageSelector.vue'
 import logoUrl from '../assets/images/logo.svg'
 
 const auth = useAuthStore()
+const { t } = useI18nStore()
 const router = useRouter()
 
 function handleLogout() {
@@ -50,7 +55,7 @@ function handleLogout() {
   display: flex;
   align-items: center;
   height: 100%;
-  gap: 32px;
+  gap: 24px;
 }
 
 .navbar-brand {
@@ -71,6 +76,8 @@ function handleLogout() {
 
 .navbar-links {
   flex: 1;
+  display: flex;
+  gap: 4px;
 }
 
 .nav-link {

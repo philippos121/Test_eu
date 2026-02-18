@@ -3,36 +3,34 @@
     <div class="auth-container fade-in">
       <div class="auth-header">
         <img :src="logoUrl" alt="EU-Recht" class="auth-logo" />
-        <h1>EU-Bagatellverfahren Portal</h1>
-        <p class="text-secondary">
-          Europäisches Verfahren für geringfügige Forderungen
-        </p>
+        <h1>{{ t('auth.portalTitle') }}</h1>
+        <p class="text-secondary">{{ t('auth.portalSubtitle') }}</p>
       </div>
 
       <form @submit.prevent="handleLogin" class="auth-form">
-        <h2>Anmelden</h2>
+        <h2>{{ t('auth.login') }}</h2>
 
         <div class="form-group">
-          <label for="email">E-Mail-Adresse</label>
+          <label for="email">{{ t('auth.email') }}</label>
           <input
             id="email"
             v-model="email"
             type="email"
             class="form-control"
-            placeholder="ihre@email.de"
+            :placeholder="t('auth.emailPlaceholder')"
             required
             autofocus
           />
         </div>
 
         <div class="form-group">
-          <label for="password">Passwort</label>
+          <label for="password">{{ t('auth.password') }}</label>
           <input
             id="password"
             v-model="password"
             type="password"
             class="form-control"
-            placeholder="Ihr Passwort"
+            :placeholder="t('auth.passwordPlaceholder')"
             required
           />
         </div>
@@ -40,21 +38,17 @@
         <div v-if="error" class="error-text mb-2">{{ error }}</div>
 
         <button type="submit" class="btn btn-primary btn-block btn-lg" :disabled="loading">
-          {{ loading ? 'Anmeldung...' : 'Anmelden' }}
+          {{ loading ? t('auth.loginLoading') : t('auth.loginButton') }}
         </button>
 
         <p class="auth-switch mt-2 text-center">
-          Noch kein Konto?
-          <router-link to="/register">Jetzt registrieren</router-link>
+          {{ t('auth.noAccount') }}
+          <router-link to="/register">{{ t('auth.register') }}</router-link>
         </p>
       </form>
 
       <div class="auth-info">
-        <p>
-          Dieses Portal unterstützt Sie bei der Durchsetzung Ihrer Forderungen
-          innerhalb der EU im Rahmen des Europäischen Bagatellverfahrens
-          (Verordnung (EG) Nr. 861/2007) für Streitwerte bis 5.000 EUR.
-        </p>
+        <p>{{ t('auth.info') }}</p>
       </div>
     </div>
   </div>
@@ -64,9 +58,11 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { useI18nStore } from '../stores/i18n'
 import logoUrl from '../assets/images/logo.svg'
 
 const auth = useAuthStore()
+const { t } = useI18nStore()
 const router = useRouter()
 
 const email = ref('')
@@ -81,7 +77,7 @@ async function handleLogin() {
     await auth.login(email.value, password.value)
     router.push('/')
   } catch (err) {
-    error.value = err.response?.data?.detail || 'Anmeldung fehlgeschlagen.'
+    error.value = err.response?.data?.detail || t('auth.loginFailed')
   } finally {
     loading.value = false
   }

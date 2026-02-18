@@ -26,6 +26,17 @@ const routes = [
     meta: { auth: true },
   },
   {
+    path: '/project',
+    name: 'ProjectDescription',
+    component: () => import('../views/ProjectDescription.vue'),
+  },
+  {
+    path: '/statistics',
+    name: 'Statistics',
+    component: () => import('../views/Statistics.vue'),
+    meta: { auth: true },
+  },
+  {
     path: '/admin',
     name: 'AdminDashboard',
     component: () => import('../views/AdminDashboard.vue'),

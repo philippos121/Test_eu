@@ -73,6 +73,17 @@ export const useCaseStore = defineStore('case', () => {
     }
   }
 
+  async function uploadDocument(caseId, file, docType = 'court_document') {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('doc_type', docType)
+    const { data } = await api.post(`/cases/${caseId}/documents/upload`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    documents.value.unshift(data)
+    return data
+  }
+
   function getDownloadUrl(caseId, docId) {
     const token = localStorage.getItem('token')
     return `/api/cases/${caseId}/documents/${docId}/download?token=${token}`
@@ -81,6 +92,6 @@ export const useCaseStore = defineStore('case', () => {
   return {
     cases, currentCase, messages, documents, processScore, loading,
     fetchCases, createCase, fetchCase, fetchMessages,
-    sendMessage, fetchDocuments, generateFormA, getDownloadUrl, fetchScore,
+    sendMessage, fetchDocuments, generateFormA, uploadDocument, getDownloadUrl, fetchScore,
   }
 })

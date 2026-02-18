@@ -3,83 +3,81 @@
     <div class="auth-container fade-in">
       <div class="auth-header">
         <img :src="logoUrl" alt="EU-Recht" class="auth-logo" />
-        <h1>EU-Bagatellverfahren Portal</h1>
-        <p class="text-secondary">Konto erstellen</p>
+        <h1>{{ t('auth.portalTitle') }}</h1>
+        <p class="text-secondary">{{ t('auth.createAccount') }}</p>
       </div>
 
       <form @submit.prevent="handleRegister" class="auth-form">
-        <h2>Registrierung</h2>
+        <h2>{{ t('auth.registration') }}</h2>
 
         <div class="form-group">
-          <label for="fullName">Vollständiger Name</label>
+          <label for="fullName">{{ t('auth.fullName') }}</label>
           <input
             id="fullName"
             v-model="fullName"
             type="text"
             class="form-control"
-            placeholder="Max Mustermann"
+            :placeholder="t('auth.fullNamePlaceholder')"
             required
             autofocus
           />
         </div>
 
         <div class="form-group">
-          <label for="email">E-Mail-Adresse</label>
+          <label for="email">{{ t('auth.email') }}</label>
           <input
             id="email"
             v-model="email"
             type="email"
             class="form-control"
-            placeholder="ihre@email.de"
+            :placeholder="t('auth.emailPlaceholder')"
             required
           />
         </div>
 
         <div class="form-group">
-          <label for="password">Passwort</label>
+          <label for="password">{{ t('auth.password') }}</label>
           <input
             id="password"
             v-model="password"
             type="password"
             class="form-control"
-            placeholder="Mindestens 8 Zeichen"
+            :placeholder="t('auth.minChars')"
             minlength="8"
             required
           />
         </div>
 
         <div class="form-group">
-          <label for="passwordConfirm">Passwort bestätigen</label>
+          <label for="passwordConfirm">{{ t('auth.confirmPassword') }}</label>
           <input
             id="passwordConfirm"
             v-model="passwordConfirm"
             type="password"
             class="form-control"
-            placeholder="Passwort wiederholen"
+            :placeholder="t('auth.confirmPlaceholder')"
             required
           />
         </div>
 
         <div class="form-group">
-          <label for="language">Bevorzugte Sprache</label>
+          <label for="language">{{ t('auth.preferredLanguage') }}</label>
           <select id="language" v-model="language" class="form-control">
-            <option value="de">Deutsch</option>
-            <option value="en">English</option>
-            <option value="fr">Français</option>
-            <option value="it">Italiano</option>
-            <option value="es">Español</option>
+            <option v-for="lang in i18nStore.languages" :key="lang.code" :value="lang.code">
+              {{ lang.flag }} {{ lang.name }}
+            </option>
           </select>
         </div>
 
         <div v-if="error" class="error-text mb-2">{{ error }}</div>
 
         <button type="submit" class="btn btn-primary btn-block btn-lg" :disabled="loading">
-          {{ loading ? 'Registrierung...' : 'Konto erstellen' }}
+          {{ loading ? t('auth.registering') : t('auth.registerButton') }}
         </button>
 
         <p class="auth-switch mt-2 text-center">
-          Bereits registriert?
-          <router-link to="/login">Anmelden</router-link>
+          {{ t('auth.alreadyRegistered') }}
+          <router-link to="/login">{{ t('auth.loginLink') }}</router-link>
         </p>
       </form>
     </div>
@@ -90,31 +88,35 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { useI18nStore } from '../stores/i18n'
 import logoUrl from '../assets/images/logo.svg'
 
 const auth = useAuthStore()
+const i18nStore = useI18nStore()
+const { t } = i18nStore
 const router = useRouter()
 
 const fullName = ref('')
 const email = ref('')
 const password = ref('')
 const passwordConfirm = ref('')
-const language = ref('de')
+const language = ref(i18nStore.locale)
 const error = ref('')
 const loading = ref(false)
 
 async function handleRegister() {
   error.value = ''
   if (password.value !== passwordConfirm.value) {
-    error.value = 'Die Passwörter stimmen nicht überein.'
+    error.value = t('auth.passwordMismatch')
     return
   }
   loading.value = true
   try {
     await auth.register(email.value, password.value, fullName.value, language.value)
+    i18nStore.setLocale(language.value)
     router.push('/')
   } catch (err) {
-    error.value = err.response?.data?.detail || 'Registrierung fehlgeschlagen.'
+    error.value = err.response?.data?.detail || t('auth.registerFailed')
   } finally {
     loading.value = false
   }
