@@ -65,6 +65,23 @@ class PosteriorItem(BaseModel):
     ci_high: float
 
 
+class PipelineScores(BaseModel):
+    """Pipeline v3 3-tier probability scores."""
+    p_recht: float = 0.0
+    p_entstanden: float = 0.0
+    p_nicht_untergegangen: float = 1.0
+    p_durchsetzbar: float = 1.0
+    p_beweis: float = 0.0
+    p_obsiegen: float = 0.0
+    p_eintreibung: Optional[float] = None
+    p_gesamt: Optional[float] = None
+    ev_betreiber: Optional[float] = None
+    take_case: Optional[bool] = None
+    claim_type: str = "invoice"
+    court_country: str = "DE"
+    element_scores: dict = {}
+
+
 class CompletedCaseDetail(BaseModel):
     id: UUID
     title: str
@@ -73,6 +90,7 @@ class CompletedCaseDetail(BaseModel):
     outcome_success: bool
     p_cash_success: Optional[float] = None
     net_ev: Optional[float] = None
+    pipeline: Optional[PipelineScores] = None
 
 
 class LearningInsight(BaseModel):
@@ -85,6 +103,29 @@ class LearningInsight(BaseModel):
     interpretation: str
 
 
+class PipelineAggregates(BaseModel):
+    """Aggregate pipeline v3 statistics across all cases."""
+    avg_p_recht: float = 0.0
+    avg_p_beweis: float = 0.0
+    avg_p_obsiegen: float = 0.0
+    avg_p_eintreibung: Optional[float] = None
+    avg_p_gesamt: Optional[float] = None
+    avg_ev: float = 0.0
+    take_case_rate: float = 0.0
+    total_evaluated: int = 0
+
+
+class BayesLearningStep(BaseModel):
+    """A step in the Bayesian learning progression."""
+    step: int
+    element: str
+    alpha: float
+    beta: float
+    mean: float
+    context_key: str = ""
+    case_outcome: str = ""
+
+
 class OverviewResponse(BaseModel):
     total_cases: int
     completed_cases: int
@@ -93,6 +134,8 @@ class OverviewResponse(BaseModel):
     posteriors: List[PosteriorItem]
     completed_cases_detail: List[CompletedCaseDetail]
     learning_insights: List[LearningInsight] = []
+    pipeline_aggregates: Optional[PipelineAggregates] = None
+    bayes_learning_progression: List[BayesLearningStep] = []
 
 
 class SeedResponse(BaseModel):
@@ -399,19 +442,35 @@ async def statistics_overview(
     hist_sorted = sorted(hist_cases, key=lambda c: c.created_at or datetime.min, reverse=True)[:15]
     sorted_completed = fictional_sorted + hist_sorted
 
-    # Pre-fetch latest p_cash_success for these cases in one query
+    # Pre-fetch latest CaseProcessScore for these cases
     detail_ids = [c.id for c in sorted_completed]
-    p_cash_map: dict[UUID, Optional[float]] = {}
+    score_map: dict[UUID, Optional[CaseProcessScore]] = {}
     if detail_ids:
-        # Use a subquery to get the latest score per case
         for cid in detail_ids:
             score_result = await db.execute(
-                select(CaseProcessScore.p_cash_success)
+                select(CaseProcessScore)
                 .where(CaseProcessScore.case_id == cid)
                 .order_by(CaseProcessScore.created_at.desc())
                 .limit(1)
             )
-            p_cash_map[cid] = score_result.scalar_one_or_none()
+            score_map[cid] = score_result.scalar_one_or_none()
+
+    # Also fetch pipeline v3 data for ALL completed cases (for aggregates)
+    all_completed_ids = [c.id for c in completed_cases_list]
+    all_pipeline_data: list[dict] = []
+    if all_completed_ids:
+        for cid in all_completed_ids:
+            sr = await db.execute(
+                select(CaseProcessScore.posteriors_json)
+                .where(CaseProcessScore.case_id == cid)
+                .order_by(CaseProcessScore.created_at.desc())
+                .limit(1)
+            )
+            pj = sr.scalar_one_or_none()
+            if pj and isinstance(pj, dict) and "pipeline_v3" in pj:
+                pv3 = pj["pipeline_v3"]
+                pv3["_outcome"] = case_success_map.get(cid, False)
+                all_pipeline_data.append(pv3)
 
     completed_cases_detail: list[CompletedCaseDetail] = []
     for c in sorted_completed:
@@ -419,15 +478,98 @@ async def statistics_overview(
         claim_amt = c.claim_amount or 0.0
         net_ev = _compute_net_ev(claim_amt, outcome_success) if claim_amt > 0 else None
 
+        # Extract pipeline v3 scores
+        pipeline_scores = None
+        sc = score_map.get(c.id)
+        if sc and sc.posteriors_json and isinstance(sc.posteriors_json, dict):
+            pv3 = sc.posteriors_json.get("pipeline_v3")
+            if pv3:
+                pipeline_scores = PipelineScores(
+                    p_recht=pv3.get("p_recht", 0.0),
+                    p_entstanden=pv3.get("p_entstanden", 0.0),
+                    p_nicht_untergegangen=pv3.get("p_nicht_untergegangen", 1.0),
+                    p_durchsetzbar=pv3.get("p_durchsetzbar", 1.0),
+                    p_beweis=pv3.get("p_beweis", 0.0),
+                    p_obsiegen=pv3.get("p_obsiegen", 0.0),
+                    p_eintreibung=pv3.get("p_eintreibung"),
+                    p_gesamt=pv3.get("p_gesamt"),
+                    ev_betreiber=pv3.get("ev_betreiber"),
+                    take_case=pv3.get("take_case"),
+                    claim_type=pv3.get("claim_type", "invoice"),
+                    court_country=pv3.get("court_country", "DE"),
+                    element_scores=pv3.get("element_scores", {}),
+                )
+
         completed_cases_detail.append(CompletedCaseDetail(
             id=c.id,
             title=c.title,
             claim_amount=c.claim_amount,
             claim_currency=c.claim_currency,
             outcome_success=outcome_success,
-            p_cash_success=p_cash_map.get(c.id),
+            p_cash_success=sc.p_cash_success if sc else None,
             net_ev=net_ev,
+            pipeline=pipeline_scores,
         ))
+
+    # ── Pipeline v3 aggregates ──
+    pipeline_aggregates = None
+    if all_pipeline_data:
+        n = len(all_pipeline_data)
+        sum_recht = sum(d.get("p_recht", 0) for d in all_pipeline_data)
+        sum_beweis = sum(d.get("p_beweis", 0) for d in all_pipeline_data)
+        sum_obsiegen = sum(d.get("p_obsiegen", 0) for d in all_pipeline_data)
+        eintreib_vals = [d["p_eintreibung"] for d in all_pipeline_data if d.get("p_eintreibung") is not None]
+        gesamt_vals = [d["p_gesamt"] for d in all_pipeline_data if d.get("p_gesamt") is not None]
+        ev_vals = [d.get("ev_betreiber", 0) for d in all_pipeline_data if d.get("ev_betreiber") is not None]
+        take_vals = [d.get("take_case", False) for d in all_pipeline_data]
+
+        pipeline_aggregates = PipelineAggregates(
+            avg_p_recht=round(sum_recht / n, 4) if n else 0,
+            avg_p_beweis=round(sum_beweis / n, 4) if n else 0,
+            avg_p_obsiegen=round(sum_obsiegen / n, 4) if n else 0,
+            avg_p_eintreibung=round(sum(eintreib_vals) / len(eintreib_vals), 4) if eintreib_vals else None,
+            avg_p_gesamt=round(sum(gesamt_vals) / len(gesamt_vals), 4) if gesamt_vals else None,
+            avg_ev=round(sum(ev_vals) / len(ev_vals), 2) if ev_vals else 0,
+            take_case_rate=round(sum(1 for t in take_vals if t) / len(take_vals), 4) if take_vals else 0,
+            total_evaluated=n,
+        )
+
+    # ── Bayes learning progression ──
+    # Simulate Bayesian updates across the 100 cases for the contract_basis element
+    bayes_steps: list[BayesLearningStep] = []
+    alpha_cb, beta_cb = 2.0, 2.0  # contract_basis prior
+    alpha_pf, beta_pf = 2.0, 2.0  # performance prior
+    step_num = 0
+    for pv3 in all_pipeline_data:
+        outcome = pv3.get("_outcome", False)
+        conf_weight = 0.175  # 0.7 * 0.25
+        if outcome:
+            alpha_cb += conf_weight
+            alpha_pf += conf_weight
+        else:
+            beta_cb += conf_weight
+            beta_pf += conf_weight
+        step_num += 1
+        # Record every 5th step + first and last
+        if step_num <= 2 or step_num % 5 == 0 or step_num == len(all_pipeline_data):
+            bayes_steps.append(BayesLearningStep(
+                step=step_num,
+                element="contract_basis",
+                alpha=round(alpha_cb, 3),
+                beta=round(beta_cb, 3),
+                mean=round(alpha_cb / (alpha_cb + beta_cb), 4),
+                context_key="invoice:DE:b2b",
+                case_outcome="success" if outcome else "failure",
+            ))
+            bayes_steps.append(BayesLearningStep(
+                step=step_num,
+                element="performance",
+                alpha=round(alpha_pf, 3),
+                beta=round(beta_pf, 3),
+                mean=round(alpha_pf / (alpha_pf + beta_pf), 4),
+                context_key="invoice:DE:b2b",
+                case_outcome="success" if outcome else "failure",
+            ))
 
     return OverviewResponse(
         total_cases=total_cases,
@@ -437,6 +579,8 @@ async def statistics_overview(
         posteriors=posteriors,
         completed_cases_detail=completed_cases_detail,
         learning_insights=learning_insights,
+        pipeline_aggregates=pipeline_aggregates,
+        bayes_learning_progression=bayes_steps,
     )
 
 
@@ -536,6 +680,15 @@ def _build_seed_cases(admin_user_id: UUID) -> list[dict]:
             "evidence_score": 90.0,
             "p_served": 0.80, "p_default": 0.55, "p_win_contested": 0.75,
             "p_settle": 0.25, "p_collect": 0.70, "p_cash_success": 0.52,
+            "pipeline_v3": {
+                "p_recht": 0.92, "p_entstanden": 0.95, "p_nicht_untergegangen": 0.98,
+                "p_durchsetzbar": 0.99, "p_beweis": 0.88, "p_obsiegen": 0.81,
+                "p_eintreibung": 0.85, "p_gesamt": 0.69,
+                "ev_betreiber": 220.0, "take_case": True,
+                "claim_type": "invoice", "court_country": "DE",
+                "element_scores": {"contract_basis": 0.95, "performance": 0.92,
+                                   "amount_due": 0.90, "non_payment": 0.88},
+            },
         },
     })
 
@@ -607,6 +760,15 @@ def _build_seed_cases(admin_user_id: UUID) -> list[dict]:
             "evidence_score": 15.0,
             "p_served": 0.70, "p_default": 0.40, "p_win_contested": 0.15,
             "p_settle": 0.10, "p_collect": 0.30, "p_cash_success": 0.05,
+            "pipeline_v3": {
+                "p_recht": 0.45, "p_entstanden": 0.50, "p_nicht_untergegangen": 0.95,
+                "p_durchsetzbar": 0.95, "p_beweis": 0.20, "p_obsiegen": 0.09,
+                "p_eintreibung": None, "p_gesamt": None,
+                "ev_betreiber": -180.0, "take_case": False,
+                "claim_type": "werklohn", "court_country": "DE",
+                "element_scores": {"contract_basis": 0.15, "performance": 0.25,
+                                   "amount_due": 0.30, "non_payment": 0.20},
+            },
         },
     })
 
@@ -690,6 +852,15 @@ def _build_seed_cases(admin_user_id: UUID) -> list[dict]:
             "evidence_score": 65.0,
             "p_served": 0.75, "p_default": 0.35, "p_win_contested": 0.50,
             "p_settle": 0.45, "p_collect": 0.60, "p_cash_success": 0.35,
+            "pipeline_v3": {
+                "p_recht": 0.68, "p_entstanden": 0.75, "p_nicht_untergegangen": 0.95,
+                "p_durchsetzbar": 0.96, "p_beweis": 0.60, "p_obsiegen": 0.41,
+                "p_eintreibung": 0.75, "p_gesamt": 0.31,
+                "ev_betreiber": 50.0, "take_case": False,
+                "claim_type": "invoice", "court_country": "DE",
+                "element_scores": {"contract_basis": 0.80, "performance": 0.55,
+                                   "amount_due": 0.60, "non_payment": 0.50},
+            },
         },
     })
 
@@ -772,6 +943,15 @@ def _build_seed_cases(admin_user_id: UUID) -> list[dict]:
             "evidence_score": 85.0,
             "p_served": 0.78, "p_default": 0.55, "p_win_contested": 0.70,
             "p_settle": 0.15, "p_collect": 0.10, "p_cash_success": 0.08,
+            "pipeline_v3": {
+                "p_recht": 0.88, "p_entstanden": 0.92, "p_nicht_untergegangen": 0.97,
+                "p_durchsetzbar": 0.99, "p_beweis": 0.82, "p_obsiegen": 0.72,
+                "p_eintreibung": 0.08, "p_gesamt": 0.06,
+                "ev_betreiber": -350.0, "take_case": False,
+                "claim_type": "invoice", "court_country": "DE",
+                "element_scores": {"contract_basis": 0.92, "performance": 0.85,
+                                   "amount_due": 0.82, "non_payment": 0.80},
+            },
         },
     })
 
@@ -854,13 +1034,147 @@ def _build_seed_cases(admin_user_id: UUID) -> list[dict]:
             "evidence_score": 75.0,
             "p_served": 0.72, "p_default": 0.50, "p_win_contested": 0.60,
             "p_settle": 0.20, "p_collect": 0.65, "p_cash_success": 0.40,
+            "pipeline_v3": {
+                "p_recht": 0.78, "p_entstanden": 0.82, "p_nicht_untergegangen": 0.97,
+                "p_durchsetzbar": 0.98, "p_beweis": 0.72, "p_obsiegen": 0.56,
+                "p_eintreibung": 0.82, "p_gesamt": 0.46,
+                "ev_betreiber": 80.0, "take_case": False,
+                "claim_type": "werklohn", "court_country": "DE",
+                "element_scores": {"contract_basis": 0.82, "performance": 0.78,
+                                   "amount_due": 0.70, "non_payment": 0.65},
+            },
         },
     })
 
     return cases
 
 
-def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[CaseEvent]]:
+def _gen_pipeline_v3(group: str, idx_in_group: int, claim_amount: float,
+                     country: str) -> dict:
+    """Generate deterministic pipeline v3 scores for a historical case."""
+    i = idx_in_group
+    if group == "service_fail":
+        pr = round(0.45 + (i % 10) * 0.04, 4)
+        pb = round(0.35 + (i % 10) * 0.035, 4)
+        return {
+            "p_recht": pr, "p_entstanden": round(min(pr * 1.05, 0.99), 4),
+            "p_nicht_untergegangen": 0.95, "p_durchsetzbar": 0.97,
+            "p_beweis": pb, "p_obsiegen": round(pr * pb, 4),
+            "p_eintreibung": None, "p_gesamt": None,
+            "ev_betreiber": round(-120 + i * 3, 2), "take_case": False,
+            "claim_type": "invoice", "court_country": country,
+            "element_scores": {"contract_basis": round(pb + 0.10, 4),
+                               "performance": round(pb + 0.05, 4),
+                               "amount_due": round(pb, 4),
+                               "non_payment": round(max(pb - 0.05, 0.05), 4)},
+        }
+    elif group == "default_collected":
+        pr = round(0.78 + (i % 10) * 0.018, 4)
+        pb = round(0.65 + (i % 10) * 0.023, 4)
+        pe = round(0.75 + (i % 10) * 0.018, 4)
+        po = round(pr * pb, 4)
+        pg = round(po * pe, 4)
+        ev = round(claim_amount * 0.30 * pg - 110, 2)
+        return {
+            "p_recht": pr, "p_entstanden": round(min(pr * 1.03, 0.99), 4),
+            "p_nicht_untergegangen": 0.97, "p_durchsetzbar": 0.99,
+            "p_beweis": pb, "p_obsiegen": po, "p_eintreibung": pe,
+            "p_gesamt": pg, "ev_betreiber": ev, "take_case": po >= 0.80 and ev > 0,
+            "claim_type": "invoice", "court_country": country,
+            "element_scores": {"contract_basis": round(pb + 0.08, 4),
+                               "performance": round(pb + 0.04, 4),
+                               "amount_due": round(pb + 0.02, 4),
+                               "non_payment": round(pb, 4)},
+        }
+    elif group == "default_failed":
+        pr = round(0.80 + (i % 5) * 0.02, 4)
+        pb = round(0.70 + (i % 5) * 0.02, 4)
+        pe = round(0.08 + (i % 5) * 0.04, 4)
+        po = round(pr * pb, 4)
+        pg = round(po * pe, 4)
+        return {
+            "p_recht": pr, "p_entstanden": round(min(pr * 1.02, 0.99), 4),
+            "p_nicht_untergegangen": 0.97, "p_durchsetzbar": 0.99,
+            "p_beweis": pb, "p_obsiegen": po, "p_eintreibung": pe,
+            "p_gesamt": pg, "ev_betreiber": round(-250 + i * 20, 2),
+            "take_case": False, "claim_type": "invoice", "court_country": country,
+            "element_scores": {"contract_basis": round(pb + 0.08, 4),
+                               "performance": round(pb + 0.04, 4),
+                               "amount_due": round(pb, 4),
+                               "non_payment": round(pb - 0.02, 4)},
+        }
+    elif group == "settled":
+        pr = round(0.55 + (i % 10) * 0.025, 4)
+        pb = round(0.48 + (i % 10) * 0.022, 4)
+        pe = round(0.60 + (i % 10) * 0.025, 4)
+        po = round(pr * pb, 4)
+        pg = round(po * pe, 4)
+        ev = round(claim_amount * 0.30 * pg - 110, 2)
+        return {
+            "p_recht": pr, "p_entstanden": round(min(pr * 1.05, 0.99), 4),
+            "p_nicht_untergegangen": 0.95, "p_durchsetzbar": 0.96,
+            "p_beweis": pb, "p_obsiegen": po, "p_eintreibung": pe,
+            "p_gesamt": pg, "ev_betreiber": ev, "take_case": False,
+            "claim_type": "invoice", "court_country": country,
+            "element_scores": {"contract_basis": round(pb + 0.12, 4),
+                               "performance": round(pb + 0.05, 4),
+                               "amount_due": round(pb + 0.03, 4),
+                               "non_payment": round(pb, 4)},
+        }
+    elif group == "judgment_win_failed":
+        pr = round(0.60 + (i % 14) * 0.015, 4)
+        pb = round(0.55 + (i % 14) * 0.014, 4)
+        pe = round(0.10 + (i % 14) * 0.015, 4)
+        po = round(pr * pb, 4)
+        pg = round(po * pe, 4)
+        return {
+            "p_recht": pr, "p_entstanden": round(min(pr * 1.04, 0.99), 4),
+            "p_nicht_untergegangen": 0.96, "p_durchsetzbar": 0.98,
+            "p_beweis": pb, "p_obsiegen": po, "p_eintreibung": pe,
+            "p_gesamt": pg, "ev_betreiber": round(-180 + i * 8, 2),
+            "take_case": False, "claim_type": "invoice", "court_country": country,
+            "element_scores": {"contract_basis": round(pb + 0.10, 4),
+                               "performance": round(pb + 0.05, 4),
+                               "amount_due": round(pb + 0.03, 4),
+                               "non_payment": round(pb, 4)},
+        }
+    elif group == "judgment_loss":
+        pr = round(0.30 + (i % 10) * 0.025, 4)
+        pb = round(0.25 + (i % 10) * 0.025, 4)
+        po = round(pr * pb, 4)
+        return {
+            "p_recht": pr, "p_entstanden": round(min(pr * 1.10, 0.99), 4),
+            "p_nicht_untergegangen": 0.90, "p_durchsetzbar": 0.92,
+            "p_beweis": pb, "p_obsiegen": po,
+            "p_eintreibung": None, "p_gesamt": None,
+            "ev_betreiber": round(-200 + i * 5, 2), "take_case": False,
+            "claim_type": "invoice", "court_country": country,
+            "element_scores": {"contract_basis": round(pb + 0.08, 4),
+                               "performance": round(pb + 0.04, 4),
+                               "amount_due": round(pb, 4),
+                               "non_payment": round(max(pb - 0.05, 0.05), 4)},
+        }
+    else:  # fill/extra successful defaults
+        pr = round(0.82 + (i % 10) * 0.015, 4)
+        pb = round(0.70 + (i % 10) * 0.020, 4)
+        pe = round(0.78 + (i % 10) * 0.018, 4)
+        po = round(pr * pb, 4)
+        pg = round(po * pe, 4)
+        ev = round(claim_amount * 0.30 * pg - 110, 2)
+        return {
+            "p_recht": pr, "p_entstanden": round(min(pr * 1.02, 0.99), 4),
+            "p_nicht_untergegangen": 0.98, "p_durchsetzbar": 0.99,
+            "p_beweis": pb, "p_obsiegen": po, "p_eintreibung": pe,
+            "p_gesamt": pg, "ev_betreiber": ev, "take_case": po >= 0.80 and ev > 0,
+            "claim_type": "invoice", "court_country": country,
+            "element_scores": {"contract_basis": round(pb + 0.10, 4),
+                               "performance": round(pb + 0.05, 4),
+                               "amount_due": round(pb + 0.02, 4),
+                               "non_payment": round(pb, 4)},
+        }
+
+
+def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[CaseEvent], list[dict]]:
     """Generate 100 historical observation cases with realistic event distributions.
 
     Target rates:
@@ -870,10 +1184,12 @@ def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[Case
       - ~60% collection rate       (30 PAYMENT_RECEIVED of ~49 favorable outcomes)
 
     Each historical case gets a ``[HIST]`` title prefix for easy identification.
+    Returns (cases, events, pipeline_scores) where pipeline_scores maps case_id→pipeline_v3 dict.
     """
     now = datetime.utcnow()
     all_cases: list[Case] = []
     all_events: list[CaseEvent] = []
+    all_pipeline_scores: list[dict] = []  # {"case_id": ..., "pipeline_v3": ...}
 
     total = 100
     served_ok = 70
@@ -888,6 +1204,7 @@ def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[Case
     collection_failed = 19  # of 49 favorable
 
     case_idx = 0
+    group_idx = 0  # index within current group
     countries = ["DE", "FR", "IT", "AT", "NL", "ES", "BE"]
 
     def _make_hist_case(idx: int) -> Case:
@@ -917,16 +1234,20 @@ def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[Case
         )
 
     # ── Group 1: service failed (30 cases) ──
+    group_idx = 0
     for _ in range(served_fail):
         c = _make_hist_case(case_idx)
         c.status = CaseStatus.REJECTED
         all_cases.append(c)
         all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.SERVICE_FAIL, 340 - case_idx))
-        case_idx += 1
+        pv3 = _gen_pipeline_v3("service_fail", group_idx, c.claim_amount, c.claimant_country or "DE")
+        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": False})
+        case_idx += 1; group_idx += 1
 
     # ── Group 2: served -> defaulted -> collected ──
     defaults_collected = min(collected, defaulted)  # 30 (limited by defaulted=35)
+    group_idx = 0
     for _ in range(defaults_collected):
         c = _make_hist_case(case_idx)
         all_cases.append(c)
@@ -935,10 +1256,13 @@ def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[Case
         all_events.append(_ev(c.id, CaseEventType.DEFAULT, 310 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.JUDGMENT_WIN, 300 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.PAYMENT_RECEIVED, 270 - case_idx))
-        case_idx += 1
+        pv3 = _gen_pipeline_v3("default_collected", group_idx, c.claim_amount, c.claimant_country or "DE")
+        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": True})
+        case_idx += 1; group_idx += 1
 
     # ── Group 3: served -> defaulted -> collection failed ──
     defaults_failed = defaulted - defaults_collected  # 5
+    group_idx = 0
     for _ in range(defaults_failed):
         c = _make_hist_case(case_idx)
         all_cases.append(c)
@@ -947,9 +1271,12 @@ def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[Case
         all_events.append(_ev(c.id, CaseEventType.DEFAULT, 310 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.JUDGMENT_WIN, 300 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.COLLECTION_FAILED, 270 - case_idx))
-        case_idx += 1
+        pv3 = _gen_pipeline_v3("default_failed", group_idx, c.claim_amount, c.claimant_country or "DE")
+        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": False})
+        case_idx += 1; group_idx += 1
 
     # ── Group 4: served -> responded -> settled -> payment ──
+    group_idx = 0
     for _ in range(settled):
         c = _make_hist_case(case_idx)
         all_cases.append(c)
@@ -958,10 +1285,13 @@ def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[Case
         all_events.append(_ev(c.id, CaseEventType.DEFENDANT_RESPONDED, 320 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.SETTLED, 300 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.PAYMENT_RECEIVED, 280 - case_idx))
-        case_idx += 1
+        pv3 = _gen_pipeline_v3("settled", group_idx, c.claim_amount, c.claimant_country or "DE")
+        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": True})
+        case_idx += 1; group_idx += 1
 
     # ── Group 5: served -> responded -> judgment win -> collected ──
     win_collected = max(0, collected - defaults_collected)
+    group_idx = 0
     for i in range(min(win_collected, judgment_win)):
         c = _make_hist_case(case_idx)
         all_cases.append(c)
@@ -970,12 +1300,15 @@ def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[Case
         all_events.append(_ev(c.id, CaseEventType.DEFENDANT_RESPONDED, 320 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.JUDGMENT_WIN, 290 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.PAYMENT_RECEIVED, 260 - case_idx))
-        case_idx += 1
+        pv3 = _gen_pipeline_v3("default_collected", group_idx + 30, c.claim_amount, c.claimant_country or "DE")
+        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": True})
+        case_idx += 1; group_idx += 1
 
     # ── Group 6: served -> responded -> judgment win -> collection failed ──
     win_not_collected = judgment_win - min(win_collected, judgment_win)
     remaining_coll_fail = max(0, collection_failed - defaults_failed)
     win_failed = min(win_not_collected, remaining_coll_fail)
+    group_idx = 0
     for _ in range(win_failed):
         c = _make_hist_case(case_idx)
         all_cases.append(c)
@@ -984,9 +1317,12 @@ def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[Case
         all_events.append(_ev(c.id, CaseEventType.DEFENDANT_RESPONDED, 320 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.JUDGMENT_WIN, 290 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.COLLECTION_FAILED, 260 - case_idx))
-        case_idx += 1
+        pv3 = _gen_pipeline_v3("judgment_win_failed", group_idx, c.claim_amount, c.claimant_country or "DE")
+        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": False})
+        case_idx += 1; group_idx += 1
 
     # ── Group 7: served -> responded -> judgment loss ──
+    group_idx = 0
     for _ in range(judgment_loss):
         c = _make_hist_case(case_idx)
         all_cases.append(c)
@@ -994,9 +1330,12 @@ def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[Case
         all_events.append(_ev(c.id, CaseEventType.SERVICE_OK, 340 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.DEFENDANT_RESPONDED, 320 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.JUDGMENT_LOSS, 290 - case_idx))
-        case_idx += 1
+        pv3 = _gen_pipeline_v3("judgment_loss", group_idx, c.claim_amount, c.claimant_country or "DE")
+        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": False})
+        case_idx += 1; group_idx += 1
 
     # ── Fill remaining to reach exactly 100 (extra successful default cases) ──
+    group_idx = 0
     while case_idx < total:
         c = _make_hist_case(case_idx)
         all_cases.append(c)
@@ -1005,9 +1344,11 @@ def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[Case
         all_events.append(_ev(c.id, CaseEventType.DEFAULT, 310 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.JUDGMENT_WIN, 300 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.PAYMENT_RECEIVED, 270 - case_idx))
-        case_idx += 1
+        pv3 = _gen_pipeline_v3("fill", group_idx, c.claim_amount, c.claimant_country or "DE")
+        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": True})
+        case_idx += 1; group_idx += 1
 
-    return all_cases, all_events
+    return all_cases, all_events, all_pipeline_scores
 
 
 @router.post("/seed", response_model=SeedResponse, status_code=status.HTTP_201_CREATED)
@@ -1063,6 +1404,7 @@ async def seed_demo_data(
                 db.add(event)
 
             overrides = item["score_overrides"]
+            pv3 = overrides.get("pipeline_v3", {})
             score = CaseProcessScore(
                 case_id=item["case"].id,
                 evidence_score=overrides.get("evidence_score", 50.0),
@@ -1078,20 +1420,45 @@ async def seed_demo_data(
                 p_collect=overrides.get("p_collect", 0.60),
                 p_cash_success=overrides.get("p_cash_success", 0.25),
                 priors_json={"source": "seed_data"},
-                posteriors_json={"source": "seed_data"},
+                posteriors_json={"pipeline_v3": pv3},
                 observations_json={"source": "seed_data"},
                 drivers_json=[],
-                model_version="v2-seed",
+                model_version="v3-seed",
             )
             db.add(score)
             fictional_count += 1
 
         # ── Create 100 historical cases ──
-        hist_cases, hist_events = _build_historical_events(admin.id)
+        hist_cases, hist_events, hist_pipeline = _build_historical_events(admin.id)
         for c in hist_cases:
             db.add(c)
         for e in hist_events:
             db.add(e)
+        # Create CaseProcessScore for each historical case with pipeline v3 data
+        for ps in hist_pipeline:
+            pv3 = ps["pipeline_v3"]
+            p_obsiegen = pv3.get("p_obsiegen", 0.0)
+            score = CaseProcessScore(
+                case_id=ps["case_id"],
+                evidence_score=50.0,
+                evidence_breakdown={"source": "historical_seed"},
+                ability_score=50.0,
+                ability_components={"source": "historical_seed"},
+                willingness_score=50.0,
+                willingness_components={"source": "historical_seed"},
+                p_served=pv3.get("p_recht", 0.5),
+                p_default=pv3.get("p_beweis", 0.5),
+                p_win_contested=p_obsiegen,
+                p_settle=0.0,
+                p_collect=pv3.get("p_eintreibung") or 0.0,
+                p_cash_success=pv3.get("p_gesamt") or p_obsiegen,
+                priors_json={"source": "historical_seed"},
+                posteriors_json={"pipeline_v3": pv3},
+                observations_json={"source": "historical_seed"},
+                drivers_json=[],
+                model_version="v3-seed",
+            )
+            db.add(score)
         historical_event_count = len(hist_events)
 
         await db.commit()

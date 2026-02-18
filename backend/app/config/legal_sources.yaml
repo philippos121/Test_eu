@@ -1,0 +1,339 @@
+# Legal information sources per EU member state
+# Ordered by priority (official government sources first)
+# Format: domain -> { name, type: official|portal|academic, language }
+
+eu_wide:
+  - domain: eur-lex.europa.eu
+    name: EUR-Lex
+    type: official
+    language: multi
+  - domain: e-justice.europa.eu
+    name: European e-Justice Portal
+    type: official
+    language: multi
+  - domain: curia.europa.eu
+    name: CJEU Case Law
+    type: official
+    language: multi
+
+countries:
+  AT:
+    name: Österreich
+    sources:
+      - domain: ris.bka.gv.at
+        name: Rechtsinformationssystem des Bundes
+        type: official
+        language: de
+      - domain: www.justiz.gv.at
+        name: Justiz Österreich
+        type: official
+        language: de
+    insolvency_register:
+      url: https://edikte.justiz.gv.at/edikte/edikthome.nsf
+      name: Ediktsdatei
+      automated: false
+
+  DE:
+    name: Deutschland
+    sources:
+      - domain: gesetze-im-internet.de
+        name: Gesetze im Internet
+        type: official
+        language: de
+      - domain: www.bundesgerichtshof.de
+        name: Bundesgerichtshof
+        type: official
+        language: de
+      - domain: dejure.org
+        name: dejure.org
+        type: portal
+        language: de
+    insolvency_register:
+      url: https://www.insolvenzbekanntmachungen.de
+      name: Insolvenzbekanntmachungen
+      automated: false
+
+  FR:
+    name: France
+    sources:
+      - domain: www.legifrance.gouv.fr
+        name: Légifrance
+        type: official
+        language: fr
+      - domain: www.courdecassation.fr
+        name: Cour de cassation
+        type: official
+        language: fr
+    insolvency_register:
+      url: https://www.bodacc.fr
+      name: BODACC
+      automated: false
+
+  IT:
+    name: Italia
+    sources:
+      - domain: www.normattiva.it
+        name: Normattiva
+        type: official
+        language: it
+      - domain: www.gazzettaufficiale.it
+        name: Gazzetta Ufficiale
+        type: official
+        language: it
+    insolvency_register:
+      url: https://www.registroimprese.it
+      name: Registro Imprese
+      automated: false
+
+  ES:
+    name: España
+    sources:
+      - domain: www.boe.es
+        name: Boletín Oficial del Estado
+        type: official
+        language: es
+      - domain: www.poderjudicial.es
+        name: Poder Judicial
+        type: official
+        language: es
+    insolvency_register:
+      url: https://www.publicidadconcursal.es
+      name: Registro Público Concursal
+      automated: false
+
+  NL:
+    name: Nederland
+    sources:
+      - domain: wetten.overheid.nl
+        name: Overheid.nl Wettenbank
+        type: official
+        language: nl
+      - domain: www.rechtspraak.nl
+        name: Rechtspraak
+        type: official
+        language: nl
+    insolvency_register:
+      url: https://insolventies.rechtspraak.nl
+      name: Centraal Insolventieregister
+      automated: false
+
+  BE:
+    name: Belgique / België
+    sources:
+      - domain: www.ejustice.just.fgov.be
+        name: Belgisch Staatsblad
+        type: official
+        language: multi
+    insolvency_register:
+      url: https://www.regsol.be
+      name: RegSol
+      automated: false
+
+  PT:
+    name: Portugal
+    sources:
+      - domain: www.pgdlisboa.pt
+        name: PGD Lisboa
+        type: official
+        language: pt
+      - domain: dre.pt
+        name: Diário da República Eletrónico
+        type: official
+        language: pt
+    insolvency_register:
+      url: https://www.citius.mj.pt
+      name: Citius
+      automated: false
+
+  PL:
+    name: Polska
+    sources:
+      - domain: isap.sejm.gov.pl
+        name: ISAP
+        type: official
+        language: pl
+    insolvency_register:
+      url: https://krz.ms.gov.pl
+      name: Krajowy Rejestr Zadłużonych
+      automated: false
+
+  CZ:
+    name: Česká republika
+    sources:
+      - domain: www.zakonyprolidi.cz
+        name: Zákony pro lidi
+        type: portal
+        language: cs
+    insolvency_register:
+      url: https://isir.justice.cz
+      name: Insolvenční rejstřík
+      automated: false
+
+  SK:
+    name: Slovensko
+    sources:
+      - domain: www.slov-lex.sk
+        name: Slov-Lex
+        type: official
+        language: sk
+    insolvency_register:
+      url: https://www.justice.gov.sk
+      name: Register úpadcov
+      automated: false
+
+  HU:
+    name: Magyarország
+    sources:
+      - domain: njt.hu
+        name: Nemzeti Jogszabálytár
+        type: official
+        language: hu
+    insolvency_register:
+      url: https://fizeteskeptelenseg.gov.hu
+      name: Fizetésképtelenségi Nyilvántartás
+      automated: false
+
+  RO:
+    name: România
+    sources:
+      - domain: legislatie.just.ro
+        name: Legislație
+        type: official
+        language: ro
+    insolvency_register:
+      url: https://www.buletinulinsolventei.ro
+      name: Buletinul Procedurilor de Insolvență
+      automated: false
+
+  BG:
+    name: България
+    sources:
+      - domain: lex.bg
+        name: Lex.bg
+        type: portal
+        language: bg
+    insolvency_register:
+      url: https://public.trreg.justice.bg
+      name: Търговски регистър
+      automated: false
+
+  HR:
+    name: Hrvatska
+    sources:
+      - domain: www.zakon.hr
+        name: Zakon.hr
+        type: portal
+        language: hr
+    insolvency_register:
+      url: https://sudreg.pravosudje.hr
+      name: Sudski registar
+      automated: false
+
+  SI:
+    name: Slovenija
+    sources:
+      - domain: www.pisrs.si
+        name: PIS
+        type: official
+        language: sl
+    insolvency_register:
+      url: https://www.ajpes.si
+      name: AJPES
+      automated: false
+
+  EL:
+    name: Ελλάδα
+    sources:
+      - domain: www.et.gr
+        name: Εφημερίδα της Κυβερνήσεως
+        type: official
+        language: el
+    insolvency_register:
+      url: https://www.e-justice.europa.eu
+      name: e-Justice (EL)
+      automated: false
+
+  LT:
+    name: Lietuva
+    sources:
+      - domain: www.e-tar.lt
+        name: TAR
+        type: official
+        language: lt
+
+  LV:
+    name: Latvija
+    sources:
+      - domain: likumi.lv
+        name: Likumi.lv
+        type: official
+        language: lv
+
+  EE:
+    name: Eesti
+    sources:
+      - domain: www.riigiteataja.ee
+        name: Riigi Teataja
+        type: official
+        language: et
+
+  FI:
+    name: Suomi
+    sources:
+      - domain: www.finlex.fi
+        name: Finlex
+        type: official
+        language: fi
+
+  SE:
+    name: Sverige
+    sources:
+      - domain: www.riksdagen.se
+        name: Riksdagen
+        type: official
+        language: sv
+
+  DK:
+    name: Danmark
+    sources:
+      - domain: www.retsinformation.dk
+        name: Retsinformation
+        type: official
+        language: da
+
+  IE:
+    name: Ireland
+    sources:
+      - domain: www.irishstatutebook.ie
+        name: Irish Statute Book
+        type: official
+        language: en
+
+  MT:
+    name: Malta
+    sources:
+      - domain: legislation.mt
+        name: Laws of Malta
+        type: official
+        language: en
+
+  LU:
+    name: Luxembourg
+    sources:
+      - domain: legilux.public.lu
+        name: Legilux
+        type: official
+        language: multi
+
+  CY:
+    name: Cyprus
+    sources:
+      - domain: www.cylaw.org
+        name: CyLaw
+        type: portal
+        language: el
+
+# Default search domains when country-specific sources unavailable
+fallback_domains:
+  - eur-lex.europa.eu
+  - e-justice.europa.eu
