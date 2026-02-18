@@ -396,16 +396,33 @@ class SeedResult(BaseModel):
 
 
 class ExpectedValueResult(BaseModel):
-    """Expected value calculation for a case."""
+    """Expected value calculation for a case — from the project owner's perspective.
+
+    Formula:
+      net_ev = p_win * 0.30 * claim_amount
+             - service_fees
+             - p_loss * (court_fees + attorney_costs + opponent_costs)
+    """
     case_id: UUID
     claim_amount: float
     claim_currency: str
-    p_cash_success: float
-    expected_recovery: float
+    p_win: float
+    p_loss: float
+    # Revenue
+    expected_commission: float  # p_win * 30% * claim_amount
+    # Cost components
     court_fees: float
+    attorney_costs: float
     service_fees: float
-    commission: float
+    opponent_costs: float
+    # Win scenario
+    cost_compensation: float  # court_fees + attorney_costs recovered on win
+    # Loss scenario
+    expected_loss_costs: float  # p_loss * (court_fees + attorney_costs + opponent_costs)
+    # Net
     net_expected_value: float
+    # Decision
     recommendation: str  # "empfohlen" / "riskant" / "nicht empfohlen"
     recommendation_reason: str
+    min_probability_threshold: float  # 80%
     breakdown: dict

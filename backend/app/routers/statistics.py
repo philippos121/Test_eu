@@ -146,22 +146,55 @@ SERVICE_COSTS_FLAT = 75.0   # flat service cost estimate (EUR)
 COMMISSION_RATE = 0.30      # 30% commission on collected amount
 
 
-def _compute_net_ev(claim_amount: float, outcome_success: bool) -> float:
-    """Compute net expected value for a completed case.
+def _estimate_attorney_costs(claim_amount: float) -> float:
+    """Estimate portal's attorney/legal operational costs.
 
-    For successful cases:
-      net_ev = claim_amount * 0.70 - court_fees - service_costs
-
-    The 0.70 factor represents the claimant's share after 30% commission.
-    For unsuccessful cases net_ev is the negative of sunk costs.
+    Simplified schedule based on claim amount:
+      - Up to 500 EUR:  50 EUR flat
+      - 500-2000 EUR:   50 + 5% of amount above 500
+      - 2000-5000 EUR:  125 + 3% of amount above 2000
     """
-    if outcome_success:
-        collected = claim_amount * (1.0 - COMMISSION_RATE)
-        court_fees = _estimate_court_fees(claim_amount)
-        return round(collected - court_fees - SERVICE_COSTS_FLAT, 2)
+    if claim_amount <= 500:
+        return 50.0
+    elif claim_amount <= 2000:
+        return 50.0 + (claim_amount - 500) * 0.05
     else:
-        court_fees = _estimate_court_fees(claim_amount)
-        return round(-(court_fees + SERVICE_COSTS_FLAT), 2)
+        return 125.0 + (claim_amount - 2000) * 0.03
+
+
+def _estimate_opponent_costs(claim_amount: float) -> float:
+    """Estimate opponent's costs that portal must pay on loss.
+
+    In ESCP proceedings, the losing party typically pays the winner's
+    reasonable costs.  Estimated as attorney costs + a small overhead.
+    """
+    return _estimate_attorney_costs(claim_amount) * 1.2
+
+
+def _compute_net_ev(claim_amount: float, outcome_success: bool) -> float:
+    """Compute net expected value for a *completed* case from the
+    **project owner's** (portal's) perspective.
+
+    On success:
+      net = 30% commission + cost compensation (court fees + attorney costs) - own costs
+    On failure:
+      net = -(own costs + opponent costs)
+
+    Own costs = court_fees + attorney_costs + service_costs
+    """
+    court_fees = _estimate_court_fees(claim_amount)
+    attorney_costs = _estimate_attorney_costs(claim_amount)
+    service_costs = SERVICE_COSTS_FLAT
+
+    if outcome_success:
+        commission = claim_amount * COMMISSION_RATE
+        cost_compensation = court_fees + attorney_costs  # recovered from opponent
+        own_costs = court_fees + attorney_costs + service_costs
+        return round(commission + cost_compensation - own_costs, 2)
+    else:
+        own_costs = court_fees + attorney_costs + service_costs
+        opponent_costs = _estimate_opponent_costs(claim_amount)
+        return round(-(own_costs + opponent_costs), 2)
 
 
 # ---------------------------------------------------------------------------
@@ -1097,14 +1130,25 @@ class ExpectedValueResult(BaseModel):
     case_id: UUID
     claim_amount: float
     claim_currency: str
-    p_cash_success: float
-    expected_recovery: float
+    p_win: float
+    p_loss: float
+    # Revenue side
+    expected_commission: float
+    # Cost components
     court_fees: float
+    attorney_costs: float
     service_fees: float
-    commission: float
+    opponent_costs: float
+    # Win scenario
+    cost_compensation: float  # court_fees + attorney_costs recovered on win
+    # Net expected value for project owner
     net_expected_value: float
+    # Expected loss costs
+    expected_loss_costs: float
+    # Decision
     recommendation: str
     recommendation_reason: str
+    min_probability_threshold: float  # 80%
     breakdown: dict
 
 
@@ -1148,10 +1192,10 @@ async def get_expected_value(
         score = await estimate(case_id, db)
         await db.commit()
 
-    p_cash = score.p_cash_success
+    p_win = score.p_cash_success
+    p_loss = 1.0 - p_win
 
-    expected_recovery = claim_amount * p_cash
-
+    # --- Cost components ---
     court_country = case.court_country or case.court_member_state or "*"
     court_fees = _calculate_court_fees(claim_amount, court_country)
 
@@ -1160,55 +1204,87 @@ async def get_expected_value(
         and case.claimant_country != case.defendant_country
     )
     service_fees = 80.0 if is_cross_border else 50.0
+    attorney_costs = _estimate_attorney_costs(claim_amount)
+    opponent_costs = _estimate_opponent_costs(claim_amount)
 
-    commission = expected_recovery * 0.30
-    net_ev = expected_recovery - commission - court_fees - service_fees
+    # --- Project owner EV formula ---
+    # Revenue: p_win × 30% × claim_amount
+    expected_commission = p_win * COMMISSION_RATE * claim_amount
 
-    # Recommendation logic
-    if net_ev > 0 and p_cash >= 0.35:
+    # Cost compensation on win: court_fees + attorney_costs recovered from opponent
+    cost_compensation = court_fees + attorney_costs
+
+    # Expected loss costs: p_loss × (own costs excl. service + opponent costs)
+    # On loss we lose court fees, attorney costs, AND pay opponent costs
+    expected_loss_costs = p_loss * (court_fees + attorney_costs + opponent_costs)
+
+    # Net EV = expected commission - service_fees (always) - expected loss costs
+    # Equivalent to:
+    #   p_win × (30% × claim + cost_comp - own_costs)
+    #   + p_loss × (-own_costs - opponent_costs)
+    net_ev = expected_commission - service_fees - expected_loss_costs
+
+    # --- Recommendation logic (minimum 80% win probability to take case) ---
+    MIN_PROBABILITY_THRESHOLD = 0.80
+
+    if p_win >= MIN_PROBABILITY_THRESHOLD and net_ev > 0:
         recommendation = "empfohlen"
         reason = (
             f"Positiver erwarteter Nettoertrag von {net_ev:.2f} {claim_currency}. "
-            f"Erfolgswahrscheinlichkeit {p_cash:.0%} liegt über der Schwelle von 35%."
+            f"Gewinnwahrscheinlichkeit {p_win:.0%} liegt über der Schwelle von 80%."
         )
-    elif net_ev > 0 and p_cash >= 0.20:
+    elif p_win >= 0.60 and net_ev > 0:
         recommendation = "riskant"
         reason = (
             f"Erwarteter Nettoertrag positiv ({net_ev:.2f} {claim_currency}), "
-            f"aber Erfolgswahrscheinlichkeit ({p_cash:.0%}) ist grenzwertig."
+            f"aber Gewinnwahrscheinlichkeit ({p_win:.0%}) liegt unter der 80%-Schwelle."
         )
     elif net_ev > 0:
-        recommendation = "riskant"
+        recommendation = "nicht empfohlen"
         reason = (
-            f"Erwarteter Nettoertrag knapp positiv ({net_ev:.2f} {claim_currency}), "
-            f"aber sehr niedrige Erfolgswahrscheinlichkeit ({p_cash:.0%})."
+            f"Gewinnwahrscheinlichkeit ({p_win:.0%}) liegt deutlich unter 80%. "
+            f"Trotz positivem EV ({net_ev:.2f} {claim_currency}) zu riskant."
         )
     else:
         recommendation = "nicht empfohlen"
         reason = (
             f"Negativer erwarteter Nettoertrag ({net_ev:.2f} {claim_currency}). "
-            f"Kosten übersteigen den erwarteten Ertrag bei {p_cash:.0%} Erfolgswahrscheinlichkeit."
+            f"Kosten übersteigen den erwarteten Ertrag bei {p_win:.0%} Gewinnwahrscheinlichkeit."
         )
 
     return ExpectedValueResult(
         case_id=case_id,
         claim_amount=claim_amount,
         claim_currency=claim_currency,
-        p_cash_success=round(p_cash, 4),
-        expected_recovery=round(expected_recovery, 2),
+        p_win=round(p_win, 4),
+        p_loss=round(p_loss, 4),
+        expected_commission=round(expected_commission, 2),
         court_fees=round(court_fees, 2),
+        attorney_costs=round(attorney_costs, 2),
         service_fees=round(service_fees, 2),
-        commission=round(commission, 2),
+        opponent_costs=round(opponent_costs, 2),
+        cost_compensation=round(cost_compensation, 2),
         net_expected_value=round(net_ev, 2),
+        expected_loss_costs=round(expected_loss_costs, 2),
         recommendation=recommendation,
         recommendation_reason=reason,
+        min_probability_threshold=MIN_PROBABILITY_THRESHOLD,
         breakdown={
-            "formula": "net_ev = (claim_amount * p_cash_success) - commission - court_fees - service_fees",
-            "p_cash_success": round(p_cash, 4),
-            "expected_recovery_calc": f"{claim_amount} * {p_cash:.4f} = {expected_recovery:.2f}",
-            "commission_rate": "30%",
-            "commission_calc": f"{expected_recovery:.2f} * 0.30 = {commission:.2f}",
+            "formula": (
+                "net_ev = p_win * 0.30 * claim_amount"
+                " - service_fees"
+                " - p_loss * (court_fees + attorney_costs + opponent_costs)"
+            ),
+            "p_win": round(p_win, 4),
+            "p_loss": round(p_loss, 4),
+            "commission_calc": f"{p_win:.4f} * 0.30 * {claim_amount} = {expected_commission:.2f}",
+            "cost_compensation_on_win": f"{court_fees:.2f} + {attorney_costs:.2f} = {cost_compensation:.2f}",
+            "expected_loss_costs_calc": (
+                f"{p_loss:.4f} * ({court_fees:.2f} + {attorney_costs:.2f} + {opponent_costs:.2f})"
+                f" = {expected_loss_costs:.2f}"
+            ),
             "court_fees_country": court_country,
             "service_type": "cross_border" if is_cross_border else "domestic",
+            "min_probability_threshold": "80%",
         },
     )

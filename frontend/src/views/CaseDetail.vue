@@ -157,7 +157,7 @@
                   </div>
                 </div>
 
-                <!-- Expected Value -->
+                <!-- Expected Value (Project Owner Perspective) -->
                 <div v-if="caseStore.currentCase.claim_amount && score.p_cash_success" class="score-section">
                   <div class="score-section-title">{{ t('case.expectedValue') }}</div>
                   <div class="ev-mini">
@@ -166,32 +166,60 @@
                       <span>{{ caseStore.currentCase.claim_amount.toFixed(2) }} EUR</span>
                     </div>
                     <div class="ev-row">
-                      <span>{{ t('case.evSuccessProb') }}</span>
-                      <span>{{ (score.p_cash_success * 100).toFixed(1) }}%</span>
+                      <span>{{ t('case.evWinProb') }}</span>
+                      <span :class="pcashClass(score.p_cash_success)">{{ (score.p_cash_success * 100).toFixed(1) }}%</span>
                     </div>
                     <div class="ev-row">
-                      <span>{{ t('case.evExpectedPayment') }}</span>
-                      <span>{{ expectedPayment.toFixed(2) }} EUR</span>
+                      <span>{{ t('case.evMinThreshold') }}</span>
+                      <span>80%</span>
+                    </div>
+
+                    <div class="ev-row ev-subheader">
+                      <span><strong>{{ t('case.evWinScenario') }}</strong></span>
+                    </div>
+                    <div class="ev-row">
+                      <span>{{ t('case.evCommission') }}</span>
+                      <span class="success">+{{ expectedCommission.toFixed(2) }} EUR</span>
+                    </div>
+                    <div class="ev-row ev-cost">
+                      <span>{{ t('case.evCostCompensation') }}</span>
+                      <span class="text-secondary">+{{ costCompensation.toFixed(2) }} EUR</span>
+                    </div>
+
+                    <div class="ev-row ev-subheader">
+                      <span><strong>{{ t('case.evCosts') }}</strong></span>
                     </div>
                     <div class="ev-row ev-cost">
                       <span>{{ t('case.evCourtFees') }}</span>
-                      <span class="danger">-{{ courtFees.toFixed(2) }} EUR</span>
+                      <span>{{ courtFees.toFixed(2) }} EUR</span>
+                    </div>
+                    <div class="ev-row ev-cost">
+                      <span>{{ t('case.evAttorneyCosts') }}</span>
+                      <span>{{ attorneyCosts.toFixed(2) }} EUR</span>
                     </div>
                     <div class="ev-row ev-cost">
                       <span>{{ t('case.evServiceCosts') }}</span>
-                      <span class="danger">-75.00 EUR</span>
+                      <span>{{ serviceFees.toFixed(2) }} EUR</span>
                     </div>
                     <div class="ev-row ev-cost">
-                      <span>{{ t('case.evCommission') }}</span>
-                      <span class="danger">-{{ commission.toFixed(2) }} EUR</span>
+                      <span>{{ t('case.evOpponentCosts') }}</span>
+                      <span>{{ opponentCosts.toFixed(2) }} EUR</span>
                     </div>
+
+                    <div class="ev-row ev-subheader">
+                      <span><strong>{{ t('case.evLossScenario') }}</strong></span>
+                    </div>
+                    <div class="ev-row ev-cost">
+                      <span>{{ t('case.evExpectedLossCosts') }}</span>
+                      <span class="danger">-{{ expectedLossCosts.toFixed(2) }} EUR</span>
+                    </div>
+
                     <div class="ev-row ev-total">
                       <span><strong>{{ t('case.evNetExpected') }}</strong></span>
                       <span :class="netEv >= 0 ? 'success' : 'danger'"><strong>{{ netEv.toFixed(2) }} EUR</strong></span>
                     </div>
                     <div class="ev-row ev-note">
-                      <span>{{ t('case.evIfLoss') }}</span>
-                      <span class="success">{{ t('case.evPortalCovers') }}</span>
+                      <span>{{ t('case.evFormula') }}</span>
                     </div>
                   </div>
                 </div>
@@ -540,21 +568,46 @@ function scoreColor(s) {
   return 'prob-low'
 }
 
-// --- Expected Value ---
-const expectedPayment = computed(() => {
-  if (!score.value || !caseStore.currentCase?.claim_amount) return 0
-  return caseStore.currentCase.claim_amount * score.value.p_cash_success
-})
+// --- Expected Value (Project Owner Perspective) ---
+const pWin = computed(() => score.value?.p_cash_success || 0)
+const pLoss = computed(() => 1 - pWin.value)
 
+const claimAmt = computed(() => caseStore.currentCase?.claim_amount || 0)
+
+// Revenue: p_win × 30% × claim_amount
+const expectedCommission = computed(() => pWin.value * 0.30 * claimAmt.value)
+
+// Court fees
 const courtFees = computed(() => {
-  const amount = caseStore.currentCase?.claim_amount || 0
+  const amount = claimAmt.value
   return Math.max(35, amount * 0.035)
 })
 
-const commission = computed(() => expectedPayment.value * 0.3)
+// Attorney costs (mirrors backend _estimate_attorney_costs)
+const attorneyCosts = computed(() => {
+  const amount = claimAmt.value
+  if (amount <= 500) return 50
+  if (amount <= 2000) return 50 + (amount - 500) * 0.05
+  return 125 + (amount - 2000) * 0.03
+})
 
+// Service fees (always incurred)
+const serviceFees = computed(() => 75)
+
+// Opponent costs (attorney costs × 1.2)
+const opponentCosts = computed(() => attorneyCosts.value * 1.2)
+
+// Cost compensation on win (court fees + attorney costs recovered from opponent)
+const costCompensation = computed(() => courtFees.value + attorneyCosts.value)
+
+// Expected loss costs: p_loss × (court_fees + attorney_costs + opponent_costs)
+const expectedLossCosts = computed(() =>
+  pLoss.value * (courtFees.value + attorneyCosts.value + opponentCosts.value)
+)
+
+// Net EV = expected commission - service_fees - expected loss costs
 const netEv = computed(() =>
-  expectedPayment.value - courtFees.value - 75 - commission.value
+  expectedCommission.value - serviceFees.value - expectedLossCosts.value
 )
 </script>
 
@@ -972,6 +1025,13 @@ const netEv = computed(() =>
   border-bottom: 1px solid var(--border);
 }
 .ev-row.ev-cost { font-size: 0.78rem; }
+.ev-row.ev-subheader {
+  border-bottom: none;
+  padding-top: 8px;
+  padding-bottom: 2px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
 .ev-row.ev-total {
   border-top: 2px solid var(--primary);
   border-bottom: none;
