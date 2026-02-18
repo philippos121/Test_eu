@@ -2,7 +2,7 @@
   <div class="auth-page">
     <div class="auth-container fade-in">
       <div class="auth-header">
-        <img :src="logoUrl" alt="AI:ssociate" class="auth-logo" />
+        <img :src="logoUrl" alt="EU-Recht" class="auth-logo" />
         <h1>EU-Bagatellverfahren Portal</h1>
         <p class="text-secondary">
           Europäisches Verfahren für geringfügige Forderungen
@@ -64,7 +64,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import logoUrl from '../assets/images/logo.png'
+import logoUrl from '../assets/images/logo.svg'
 
 const auth = useAuthStore()
 const router = useRouter()

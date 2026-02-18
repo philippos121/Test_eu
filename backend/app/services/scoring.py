@@ -1,6 +1,16 @@
 """
-Process-score engine: EvidenceScorer, BayesUpdater, AbilityScorer,
+Process-score engine v2: EvidenceScorer, BayesUpdater, AbilityScorer,
 WillingnessScorer, and the top-level estimate() function.
+
+v2 fixes:
+- Logistic (sigmoid) evidence→probability mapping instead of linear
+- Willingness score integrated into p_settle and p_collect
+- Log-odds ability adjustment for p_collect (not raw multiplication)
+- COLLECTION_FAILED event type for balanced Bayes collect rate
+- Adjusted default priors for ESCP cross-border reality
+- Prior validation (alpha/beta >= 0.01)
+- Monotonic fact merging (True flags never revert to False)
+- 90% credible interval stored alongside posterior mean
 """
 from __future__ import annotations
 
@@ -95,6 +105,29 @@ def score_evidence(case: Case, facts: dict | None = None) -> EvidenceResult:
 
     r.total = r.contract + r.delivery + r.invoice + r.dunning
     return r
+
+
+# ---------------------------------------------------------------------------
+# A2) Logistic evidence→probability mapping
+# ---------------------------------------------------------------------------
+
+def evidence_to_probability(score: float, contest_risk: float,
+                            midpoint: float = 50.0,
+                            steepness: float = 0.08,
+                            cr_weight: float = 1.5) -> float:
+    """
+    Sigmoid mapping: evidence score (0-100) → win probability (0-1).
+
+    Contestation risk shifts the curve leftward, meaning stronger evidence
+    is needed to achieve the same win probability when contestation is high.
+    This is more realistic than the old linear `score/100 * (1 - cr*0.5)`.
+
+    midpoint=50: score of 50 without contestation → ~50% win probability
+    steepness=0.08: controls how quickly probability rises with evidence
+    cr_weight=1.5: how much contestation risk shifts the curve
+    """
+    logit = steepness * (score - midpoint) - cr_weight * contest_risk
+    return 1.0 / (1.0 + math.exp(-logit))
 
 
 # ---------------------------------------------------------------------------
@@ -230,10 +263,13 @@ def score_willingness(case: Case, facts: dict | None = None) -> WillingnessResul
 # E) Bayes Updater  (Beta-Binomial)
 # ---------------------------------------------------------------------------
 
+# Adjusted for ESCP cross-border reality:
+# - served: 70% (was 80%) — cross-border service success is lower
+# - settle: 30% (was 20%) — post-filing settlement rates are 25-40%
 DEFAULT_PRIORS: dict[str, tuple[float, float]] = {
-    "served":  (8.0, 2.0),   # ~80 % base service rate
-    "default": (5.0, 5.0),   # ~50 %
-    "settle":  (2.0, 8.0),   # ~20 %
+    "served":  (7.0, 3.0),   # ~70 % base service rate (cross-border ESCP)
+    "default": (5.0, 5.0),   # ~50 % (reasonable variance)
+    "settle":  (3.0, 7.0),   # ~30 % (post-filing settlement)
     "collect": (6.0, 4.0),   # ~60 %
 }
 
@@ -253,7 +289,7 @@ RATE_EVENT_MAP: dict[str, dict] = {
     },
     "collect": {
         "success": {CaseEventType.PAYMENT_RECEIVED},
-        "failure": set(),  # no explicit failure event
+        "failure": {CaseEventType.COLLECTION_FAILED},
     },
 }
 
@@ -267,6 +303,26 @@ class BayesPosterior:
     alpha_post: float
     beta_post: float
     mean: float  # posterior mean = α'/(α'+β')
+    ci_low: float = 0.0   # 90% credible interval lower bound
+    ci_high: float = 1.0  # 90% credible interval upper bound
+
+
+def _beta_quantile(alpha: float, beta_param: float, p: float) -> float:
+    """Approximate Beta quantile using the normal approximation.
+
+    For production, scipy.stats.beta.ppf would be ideal, but we avoid
+    the heavy dependency. The normal approximation is reasonable for
+    alpha + beta >= 2.
+    """
+    if alpha <= 0 or beta_param <= 0:
+        return 0.5
+    mean = alpha / (alpha + beta_param)
+    var = (alpha * beta_param) / ((alpha + beta_param) ** 2 * (alpha + beta_param + 1))
+    std = math.sqrt(var) if var > 0 else 0
+    # Normal quantile approximation for p=0.05 → z=-1.645, p=0.95 → z=1.645
+    z = -1.645 if p < 0.5 else 1.645
+    q = mean + z * std
+    return max(0.0, min(1.0, q))
 
 
 def bayes_update(
@@ -275,11 +331,13 @@ def bayes_update(
     successes: int,
     trials: int,
 ) -> BayesPosterior:
-    """Beta-Binomial posterior update."""
+    """Beta-Binomial posterior update with 90% credible interval."""
     failures = trials - successes
     a_post = alpha + successes
     b_post = beta_param + failures
     mean = a_post / (a_post + b_post) if (a_post + b_post) > 0 else 0.5
+    ci_low = _beta_quantile(a_post, b_post, 0.05)
+    ci_high = _beta_quantile(a_post, b_post, 0.95)
     return BayesPosterior(
         alpha_prior=alpha,
         beta_prior=beta_param,
@@ -288,6 +346,8 @@ def bayes_update(
         alpha_post=a_post,
         beta_post=b_post,
         mean=mean,
+        ci_low=round(ci_low, 4),
+        ci_high=round(ci_high, 4),
     )
 
 
@@ -309,7 +369,8 @@ async def get_priors(
         )
         row = result.scalar_one_or_none()
         if row:
-            return (row.alpha, row.beta)
+            # Validate: priors must be positive to avoid undefined posteriors
+            return (max(0.01, row.alpha), max(0.01, row.beta))
 
     # Try general subtype fallback
     if claim_subtype != "general":
@@ -330,7 +391,59 @@ def count_events(events: list[CaseEvent], rate_name: str) -> tuple[int, int]:
 
 
 # ---------------------------------------------------------------------------
-# F) p_cash_success formula
+# F) Willingness-adjusted probabilities
+# ---------------------------------------------------------------------------
+
+def _logit(p: float) -> float:
+    """Safe log-odds: clamp p to (0.001, 0.999) to avoid infinities."""
+    p = max(0.001, min(0.999, p))
+    return math.log(p / (1.0 - p))
+
+
+def _sigmoid(x: float) -> float:
+    """Numerically stable sigmoid."""
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    ex = math.exp(x)
+    return ex / (1.0 + ex)
+
+
+def adjust_settle_by_willingness(p_settle_base: float,
+                                 willingness_score: float) -> float:
+    """
+    Higher willingness → higher settlement probability.
+    Uses log-odds shift: willingness 50=neutral, >50 increases, <50 decreases.
+    Strength factor 0.03 keeps the adjustment moderate.
+    """
+    shift = (willingness_score - 50.0) * 0.03
+    return _sigmoid(_logit(p_settle_base) + shift)
+
+
+def adjust_collect_by_ability(p_collect_base: float,
+                              ability_score: float) -> float:
+    """
+    Log-odds adjustment instead of raw multiplication.
+    Ability score 75=neutral baseline (no shift), lower reduces, higher increases.
+    This prevents p_collect from being driven to zero by low ability
+    and avoids double-counting vs Bayes posterior.
+    """
+    shift = (ability_score - 75.0) * 0.04
+    return _sigmoid(_logit(p_collect_base) + shift)
+
+
+def adjust_collect_by_willingness(p_collect: float,
+                                  willingness_score: float) -> float:
+    """
+    Secondary willingness adjustment on collection:
+    higher willingness signals voluntary compliance → better collection.
+    Weaker effect than ability (factor 0.02).
+    """
+    shift = (willingness_score - 50.0) * 0.02
+    return _sigmoid(_logit(p_collect) + shift)
+
+
+# ---------------------------------------------------------------------------
+# F2) p_cash_success formula  (unchanged algebraically)
 # ---------------------------------------------------------------------------
 
 def compute_p_cash_success(
@@ -399,6 +512,12 @@ def compute_drivers(
             "factor": "Geringe Zahlungswilligkeit",
             "detail": f"Willingness-Score {willingness.score:.0f}/100",
         })
+    elif willingness.score >= 65:
+        drivers.append({
+            "direction": "positive",
+            "factor": "Gute Zahlungswilligkeit",
+            "detail": f"Willingness-Score {willingness.score:.0f}/100",
+        })
     if willingness.partial_payment:
         drivers.append({
             "direction": "positive",
@@ -435,7 +554,24 @@ def compute_drivers(
 
 
 # ---------------------------------------------------------------------------
-# H) Top-level estimate()
+# H) Monotonic fact merging
+# ---------------------------------------------------------------------------
+
+def merge_facts_monotonic(merged: dict, new_facts: dict) -> dict:
+    """Merge extracted facts. Boolean True flags never revert to False.
+
+    This prevents a later LLM trace from accidentally overriding an
+    earlier confirmed fact (e.g. has_contract=True → not mentioned → False).
+    """
+    for key, value in new_facts.items():
+        if key in merged and merged[key] is True and isinstance(value, bool):
+            continue  # keep the True — don't let it revert
+        merged[key] = value
+    return merged
+
+
+# ---------------------------------------------------------------------------
+# I) Top-level estimate()
 # ---------------------------------------------------------------------------
 
 async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
@@ -450,7 +586,7 @@ async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
     )
     events = list(ev_result.scalars().all())
 
-    # Gather extracted facts from LLM traces
+    # Gather extracted facts from LLM traces with monotonic merging
     trace_result = await db.execute(
         select(CaseLLMTrace).where(CaseLLMTrace.case_id == case_id).order_by(CaseLLMTrace.created_at)
     )
@@ -458,7 +594,7 @@ async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
     merged_facts: dict = {}
     for t in traces:
         if t.extracted_facts:
-            merged_facts.update(t.extracted_facts)
+            merge_facts_monotonic(merged_facts, t.extracted_facts)
 
     country = case.defendant_domicile_country or case.defendant_country or "*"
     claim_subtype = "general"  # extend later
@@ -492,20 +628,27 @@ async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
             "alpha": post.alpha_post,
             "beta": post.beta_post,
             "mean": round(post.mean, 4),
+            "ci_low": post.ci_low,
+            "ci_high": post.ci_high,
         }
 
     # F) Map scores → probabilities
     p_served = posteriors["served"].mean
     p_default = posteriors["default"].mean
-    p_settle = posteriors["settle"].mean
+    p_settle_base = posteriors["settle"].mean
     p_collect_base = posteriors["collect"].mean
 
-    # Adjust p_win_contested from evidence + contestation risk
-    p_win_contested = (ev.total / 100.0) * (1 - cr * 0.5)
+    # Logistic evidence→probability mapping with contestation shift
+    p_win_contested = evidence_to_probability(ev.total, cr)
     p_win_contested = max(0.0, min(1.0, p_win_contested))
 
-    # Adjust p_collect by ability score
-    p_collect = p_collect_base * (ab.score / 100.0)
+    # Willingness modulates settlement probability
+    p_settle = adjust_settle_by_willingness(p_settle_base, wi.score)
+
+    # Ability adjusts collection via log-odds (not raw multiplication)
+    p_collect = adjust_collect_by_ability(p_collect_base, ab.score)
+    # Willingness also modulates collection (secondary effect)
+    p_collect = adjust_collect_by_willingness(p_collect, wi.score)
     p_collect = max(0.0, min(1.0, p_collect))
 
     p_cash = compute_p_cash_success(p_served, p_default, p_win_contested, p_settle, p_collect)
@@ -538,7 +681,7 @@ async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
         posteriors_json=post_data,
         observations_json=obs_data,
         drivers_json=[asdict(d) if hasattr(d, '__dataclass_fields__') else d for d in drivers],
-        model_version="v1",
+        model_version="v2",
     )
     db.add(score)
     await db.flush()

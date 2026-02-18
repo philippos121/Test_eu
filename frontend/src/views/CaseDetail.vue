@@ -289,7 +289,7 @@ import { useRoute } from 'vue-router'
 import { useCaseStore } from '../stores/case'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import logoUrl from '../assets/images/logo.png'
+import logoUrl from '../assets/images/logo.svg'
 
 const route = useRoute()
 const caseStore = useCaseStore()

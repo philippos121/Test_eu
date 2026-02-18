@@ -1,5 +1,5 @@
 """
-Integration tests: 5 fixture cases exercising the full scoring pipeline.
+Integration tests v2: 5 fixture cases exercising the full scoring pipeline.
 Tests run without a DB by mocking the async session.
 """
 import pytest
@@ -16,6 +16,10 @@ from app.services.scoring import (
     compute_p_cash_success,
     count_events,
     compute_drivers,
+    evidence_to_probability,
+    adjust_settle_by_willingness,
+    adjust_collect_by_ability,
+    adjust_collect_by_willingness,
     EvidenceResult,
     AbilityResult,
     WillingnessResult,
@@ -106,16 +110,25 @@ class TestCase1_StrongCase:
         ev = score_evidence(self.case, self.facts)
         cr = contestation_risk(self.case, self.facts)
         ab = score_ability(self.case, self.facts)
+        wi = score_willingness(self.case, self.facts)
 
-        # Bayes: 2 service successes
+        # Bayes: 2 service successes with new priors
         s_served, n_served = count_events(self.events, "served")
-        post_served = bayes_update(8, 2, s_served, n_served)
+        post_served = bayes_update(7, 3, s_served, n_served)
 
-        p_win_contested = (ev.total / 100) * (1 - cr * 0.5)
-        p_collect = post_served.mean * (ab.score / 100)  # simplified
+        # Logistic evidence mapping
+        p_win_contested = evidence_to_probability(ev.total, cr)
+
+        # Log-odds ability adjustment for collect
+        p_collect_base = 0.6
+        p_collect = adjust_collect_by_ability(p_collect_base, ab.score)
+        p_collect = adjust_collect_by_willingness(p_collect, wi.score)
+
+        # Willingness adjustment for settle
+        p_settle = adjust_settle_by_willingness(0.3, wi.score)
 
         p_cash = compute_p_cash_success(
-            post_served.mean, 0.5, p_win_contested, 0.2, p_collect,
+            post_served.mean, 0.5, p_win_contested, p_settle, p_collect,
         )
         assert p_cash > 0.3  # strong case should have decent probability
 
@@ -145,9 +158,10 @@ class TestCase2_WeakCase:
 
     def test_p_cash_with_weak_evidence(self):
         ev = score_evidence(self.case, self.facts)
-        p_win_contested = ev.total / 100  # very low
-        p_cash = compute_p_cash_success(0.8, 0.5, p_win_contested, 0.2, 0.6)
-        assert p_cash < 0.4  # weak case
+        cr = contestation_risk(self.case, self.facts)
+        p_win_contested = evidence_to_probability(ev.total, cr)
+        p_cash = compute_p_cash_success(0.7, 0.5, p_win_contested, 0.3, 0.5)
+        assert p_cash < 0.5  # weak case
 
 
 # =====================================================================
@@ -190,9 +204,10 @@ class TestCase3_DisputedCase:
     def test_win_contested_reduced_by_dispute(self):
         ev = score_evidence(self.case, self.facts)
         cr = contestation_risk(self.case, self.facts)
-        p_win_contested = (ev.total / 100) * (1 - cr * 0.5)
-        # Should be noticeably lower than evidence alone
-        assert p_win_contested < ev.total / 100
+        p_win_no_dispute = evidence_to_probability(ev.total, 0.0)
+        p_win_with_dispute = evidence_to_probability(ev.total, cr)
+        # Should be noticeably lower with dispute
+        assert p_win_with_dispute < p_win_no_dispute
 
     def test_defendant_responded_affects_default_rate(self):
         s, n = count_events(self.events, "default")
@@ -238,20 +253,22 @@ class TestCase4_InsolvencyCase:
         wi = score_willingness(self.case, self.facts)
         cr = contestation_risk(self.case, self.facts)
         posteriors = {
-            "served": bayes_update(8, 2, 0, 0),
+            "served": bayes_update(7, 3, 0, 0),
             "default": bayes_update(5, 5, 0, 0),
-            "settle": bayes_update(2, 8, 0, 0),
+            "settle": bayes_update(3, 7, 0, 0),
             "collect": bayes_update(6, 4, 0, 0),
         }
         drivers = compute_drivers(ev, ab, wi, cr, posteriors)
         insolvency_drivers = [d for d in drivers if "Insolvenz" in d["factor"]]
         assert len(insolvency_drivers) == 1
 
-    def test_p_collect_crushed_by_insolvency(self):
+    def test_p_collect_reduced_by_insolvency(self):
+        """Log-odds adjustment should reduce but not zero out p_collect."""
         ab = score_ability(self.case, self.facts)
-        p_collect_base = 0.6  # from default prior
-        p_collect = p_collect_base * (ab.score / 100)
-        assert p_collect < 0.1  # very low collection probability
+        p_collect_base = 0.6
+        p_collect = adjust_collect_by_ability(p_collect_base, ab.score)
+        assert p_collect < 0.2  # significantly reduced
+        assert p_collect > 0.01  # but not zero (log-odds can't reach 0)
 
 
 # =====================================================================
@@ -289,9 +306,9 @@ class TestCase5_RepeatDefendant:
     def test_default_rate_high(self):
         s, n = count_events(self.events, "default")
         assert s == 1
-        assert n == 1  # 1 default out of 1 trial
+        assert n == 1
         post = bayes_update(5, 5, s, n)
-        assert post.mean > 0.5  # higher than prior
+        assert post.mean > 0.5
 
     def test_collect_rate_low_no_payment(self):
         s, n = count_events(self.events, "collect")
@@ -306,21 +323,31 @@ class TestCase5_RepeatDefendant:
         ab = score_ability(self.case, self.facts)
         wi = score_willingness(self.case, self.facts)
 
-        # Build posteriors from events
-        served_post = bayes_update(8, 2, *count_events(self.events, "served"))
+        # Build posteriors from events with new priors
+        served_post = bayes_update(7, 3, *count_events(self.events, "served"))
         default_post = bayes_update(5, 5, *count_events(self.events, "default"))
-        settle_post = bayes_update(2, 8, *count_events(self.events, "settle"))
+        settle_post = bayes_update(3, 7, *count_events(self.events, "settle"))
         collect_post = bayes_update(6, 4, *count_events(self.events, "collect"))
 
-        p_win_contested = (ev.total / 100) * (1 - cr * 0.5)
-        p_collect = collect_post.mean * (ab.score / 100)
+        # v2 formulas
+        p_win_contested = evidence_to_probability(ev.total, cr)
+        p_settle = adjust_settle_by_willingness(settle_post.mean, wi.score)
+        p_collect = adjust_collect_by_ability(collect_post.mean, ab.score)
+        p_collect = adjust_collect_by_willingness(p_collect, wi.score)
 
         p_cash = compute_p_cash_success(
             served_post.mean, default_post.mean, p_win_contested,
-            settle_post.mean, p_collect,
+            p_settle, p_collect,
         )
         # Should be moderate — decent service/default but low willingness
-        assert 0.1 < p_cash < 0.7
+        assert 0.05 < p_cash < 0.7
+
+    def test_low_willingness_reduces_settle(self):
+        """Low willingness should reduce settlement probability."""
+        wi = score_willingness(self.case, self.facts)
+        p_settle_base = 0.3
+        p_settle = adjust_settle_by_willingness(p_settle_base, wi.score)
+        assert p_settle < p_settle_base
 
     def test_negative_drivers(self):
         ev = score_evidence(self.case, self.facts)
@@ -328,9 +355,9 @@ class TestCase5_RepeatDefendant:
         wi = score_willingness(self.case, self.facts)
         cr = contestation_risk(self.case, self.facts)
         posteriors = {
-            "served": bayes_update(8, 2, 1, 1),
+            "served": bayes_update(7, 3, 1, 1),
             "default": bayes_update(5, 5, 1, 1),
-            "settle": bayes_update(2, 8, 0, 0),
+            "settle": bayes_update(3, 7, 0, 0),
             "collect": bayes_update(6, 4, 0, 0),
         }
         drivers = compute_drivers(ev, ab, wi, cr, posteriors)

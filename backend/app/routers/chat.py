@@ -94,10 +94,13 @@ async def send_message(
     )
     db.add(assistant_msg)
 
-    # Write LLM trace for scoring pipeline
-    extracted_facts = {}
-    if update_data:
-        extracted_facts = _extract_scoring_facts(update_data)
+    # Write LLM trace for scoring pipeline — extract from structured data
+    # AND from conversation text to capture willingness/ability signals
+    extracted_facts = _extract_scoring_facts(
+        update_data or {},
+        user_text=body.content,
+        assistant_text=response_text,
+    )
     trace = CaseLLMTrace(
         case_id=case.id,
         question=body.content,
@@ -127,14 +130,25 @@ async def send_message(
     )
 
 
-def _extract_scoring_facts(update_data: dict) -> dict:
-    """Map LLM update fields to scoring-relevant fact flags."""
+def _extract_scoring_facts(update_data: dict, user_text: str = "",
+                           assistant_text: str = "") -> dict:
+    """Map LLM update fields + conversation text to scoring-relevant fact flags.
+
+    Extracts evidence, willingness, and ability signals from both
+    structured update_data and free-text conversation content.
+    """
     facts = {}
 
     desc = str(update_data.get("claim_description", "")).lower()
     evidence = str(update_data.get("claim_evidence", "")).lower()
-    combined = desc + " " + evidence
+    additional = str(update_data.get("additional_information", "")).lower()
+    combined = desc + " " + evidence + " " + additional
 
+    # Also scan user + assistant text for signals not in structured data
+    conv_text = (user_text + " " + assistant_text).lower()
+    all_text = combined + " " + conv_text
+
+    # --- Evidence dimension ---
     if update_data.get("claim_basis"):
         facts["has_contract"] = True
     if any(kw in combined for kw in ["vertrag", "auftrag", "contract", "agreement", "schriftlich"]):
@@ -150,12 +164,52 @@ def _extract_scoring_facts(update_data: dict) -> dict:
         facts["has_reminder"] = True
     if any(kw in combined for kw in ["frist", "deadline"]):
         facts["has_deadline_set"] = True
+
+    # --- Contestation signals ---
     if any(kw in combined for kw in ["nicht geliefert", "mangelhaft", "reklamation", "dispute"]):
         facts["defendant_disputes"] = True
     if any(kw in combined for kw in ["mangel", "defect", "quality"]):
         facts["quality_issue"] = True
-    if any(kw in combined for kw in ["teilzahlung", "partial payment"]):
+
+    # --- Willingness dimension (from conversation + structured data) ---
+    if any(kw in all_text for kw in ["teilzahlung", "partial payment", "anzahlung",
+                                      "hat teilweise gezahlt", "teilbetrag"]):
         facts["partial_payment"] = True
+
+    if any(kw in all_text for kw in ["vergleich angeboten", "vergleichsangebot",
+                                      "settlement offer", "gütliche einigung",
+                                      "einigung vorgeschlagen"]):
+        facts["settlement_offered"] = True
+
+    # Debtor responded to reminder (positive willingness signal)
+    if any(kw in all_text for kw in ["hat auf mahnung reagiert", "hat geantwortet",
+                                      "responded to reminder", "debtor responded",
+                                      "schuldner hat reagiert"]):
+        facts["responded_to_reminder"] = True
+
+    # Debtor ignores reminders (negative willingness signal)
+    if any(kw in all_text for kw in ["keine reaktion", "nicht reagiert",
+                                      "ignoriert", "no response",
+                                      "keine antwort", "unbeantwortet"]):
+        facts["responded_to_reminder"] = False
+
+    # Repeat offender
+    if any(kw in all_text for kw in ["wiederholungstäter", "repeat offender",
+                                      "bereits mehrfach", "schon wieder",
+                                      "erneut nicht gezahlt", "mehrfach gemahnt"]):
+        facts["repeat_defendant"] = True
+
+    # --- Ability dimension (from conversation + structured data) ---
+    if any(kw in all_text for kw in ["insolvent", "insolvenz", "insolvency",
+                                      "bankrupt", "zahlungsunfähig",
+                                      "insolvenzverfahren"]):
+        facts["insolvency_flag"] = True
+
+    if any(kw in all_text for kw in ["firma aufgelöst", "firma gelöscht",
+                                      "company dissolved", "nicht mehr aktiv",
+                                      "liquidiert", "liquidation",
+                                      "betrieb eingestellt"]):
+        facts["company_active"] = False
 
     return facts
 
