@@ -94,7 +94,7 @@
       <!-- Seed Button (Admin) -->
       <section class="card fade-in mt-2 mb-3" v-if="auth.user?.is_admin">
         <h2>Admin: Seed-Daten</h2>
-        <p class="text-secondary mb-1">Generiert 5 fiktive abgeschlossene Fälle und 100 historische Beobachtungen für die Bayes-Statistik.</p>
+        <p class="text-secondary mb-1">Generiert 5 fiktive abgeschlossene Beispielfälle und 100 historische Beobachtungen für die Statistik.</p>
         <div class="flex gap-1">
           <button class="btn btn-primary" @click="seedData" :disabled="seeding">
             {{ seeding ? 'Wird generiert...' : 'Seed-Daten generieren' }}

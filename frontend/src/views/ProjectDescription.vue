@@ -10,44 +10,83 @@
         <p class="subtitle">{{ t('project.subtitle') }}</p>
       </div>
 
-      <!-- What is this? -->
+      <!-- Market Opportunity -->
       <section class="card fade-in mt-3">
         <h2>{{ t('project.whatIsThis') }}</h2>
         <p>{{ t('project.whatIsThisText') }}</p>
+        <div class="kpi-row mt-2">
+          <div class="kpi-card">
+            <div class="kpi-value">5.000 EUR</div>
+            <div class="kpi-label">Bagatellgrenze</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-value">27</div>
+            <div class="kpi-label">EU-Mitgliedstaaten</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-value">24</div>
+            <div class="kpi-label">Amtssprachen</div>
+          </div>
+        </div>
       </section>
 
-      <!-- How it works -->
+      <!-- Product Architecture -->
       <section class="card fade-in mt-2">
         <h2>{{ t('project.howItWorks') }}</h2>
         <p>{{ t('project.howItWorksText') }}</p>
         <div class="process-flow mt-2">
           <div class="flow-step">
             <div class="flow-icon">1</div>
-            <h3>{{ t('dashboard.step1Title') }}</h3>
-            <p>{{ t('dashboard.step1Desc') }}</p>
+            <h3>{{ t('project.step1TitleInv') }}</h3>
+            <p>{{ t('project.step1DescInv') }}</p>
           </div>
           <div class="flow-arrow">&rarr;</div>
           <div class="flow-step">
             <div class="flow-icon">2</div>
-            <h3>{{ t('dashboard.step2Title') }}</h3>
-            <p>{{ t('dashboard.step2Desc') }}</p>
+            <h3>{{ t('project.step2TitleInv') }}</h3>
+            <p>{{ t('project.step2DescInv') }}</p>
           </div>
           <div class="flow-arrow">&rarr;</div>
           <div class="flow-step">
             <div class="flow-icon">3</div>
-            <h3>{{ t('dashboard.step3Title') }}</h3>
-            <p>{{ t('dashboard.step3Desc') }}</p>
+            <h3>{{ t('project.step3TitleInv') }}</h3>
+            <p>{{ t('project.step3DescInv') }}</p>
           </div>
           <div class="flow-arrow">&rarr;</div>
           <div class="flow-step">
             <div class="flow-icon">4</div>
-            <h3>{{ t('dashboard.step4Title') }}</h3>
-            <p>{{ t('dashboard.step4Desc') }}</p>
+            <h3>{{ t('project.step4TitleInv') }}</h3>
+            <p>{{ t('project.step4DescInv') }}</p>
           </div>
         </div>
       </section>
 
-      <!-- Probability Calculation -->
+      <!-- App-Based Customer Access -->
+      <section class="card fade-in mt-2">
+        <h2>{{ t('project.appAccess') }}</h2>
+        <p>{{ t('project.appAccessText') }}</p>
+        <div class="arch-diagram mt-2">
+          <div class="arch-box arch-app">
+            <div class="arch-icon">App</div>
+            <h4>Kunden-App</h4>
+            <p>Fallerfassung, KI-Chat, Dokumenten-Upload, Statusverfolgung</p>
+          </div>
+          <div class="arch-arrow">&rarr;</div>
+          <div class="arch-box arch-backend">
+            <div class="arch-icon">API</div>
+            <h4>Backend</h4>
+            <p>KI-Agent, Scoring, Formularerstellung, Statistik</p>
+          </div>
+          <div class="arch-arrow">&rarr;</div>
+          <div class="arch-box arch-portal">
+            <div class="arch-icon">Portal</div>
+            <h4>Admin-Portal</h4>
+            <p>Fallmanagement, Risikobewertung, Priorensteuerung</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Risk Assessment / Probability -->
       <section class="card fade-in mt-2">
         <h2>{{ t('project.probability') }}</h2>
         <p>{{ t('project.probabilityText') }}</p>
@@ -84,7 +123,7 @@
         </div>
       </section>
 
-      <!-- Bayesian Learning -->
+      <!-- Statistical Methodology -->
       <section class="card fade-in mt-2">
         <h2>{{ t('project.bayesian') }}</h2>
         <p>{{ t('project.bayesianText') }}</p>
@@ -110,13 +149,13 @@
         </div>
       </section>
 
-      <!-- Expected Value & Commission -->
+      <!-- Unit Economics / Expected Value -->
       <section class="card fade-in mt-2">
         <h2>{{ t('project.expectedValue') }}</h2>
         <p>{{ t('project.expectedValueText') }}</p>
 
         <div class="ev-example mt-2">
-          <h3>Beispielrechnung</h3>
+          <h3>Beispielrechnung (Betreibersicht)</h3>
           <table class="ev-table">
             <tbody>
               <tr>
@@ -140,11 +179,11 @@
                 <td class="text-right danger">-75,00 EUR</td>
               </tr>
               <tr>
-                <td>Provision (30%)</td>
+                <td>Provision (30% bei Erfolg)</td>
                 <td class="text-right danger">-585,00 EUR</td>
               </tr>
               <tr class="total">
-                <td><strong>Erwarteter Netto-Ertrag</strong></td>
+                <td><strong>Erwarteter Netto-Ertrag (Betreiber)</strong></td>
                 <td class="text-right success"><strong>1.185,00 EUR</strong></td>
               </tr>
             </tbody>
@@ -152,7 +191,7 @@
         </div>
       </section>
 
-      <!-- Commission Model -->
+      <!-- Revenue Model -->
       <section class="card fade-in mt-2">
         <h2>{{ t('project.commission') }}</h2>
         <p>{{ t('project.commissionText') }}</p>
@@ -163,31 +202,38 @@
             <div class="highlight-label">Provision bei Erfolg</div>
           </div>
           <div class="highlight-card">
-            <div class="highlight-value">0 EUR</div>
-            <div class="highlight-label">Kosten bei Misserfolg</div>
+            <div class="highlight-value">&ge; 80%</div>
+            <div class="highlight-label">Min. Erfolgswahrscheinlichkeit</div>
           </div>
           <div class="highlight-card">
-            <div class="highlight-value">100%</div>
-            <div class="highlight-label">Kostenübernahme durch Portal</div>
+            <div class="highlight-value">0 EUR</div>
+            <div class="highlight-label">Kostenrisiko Kunde</div>
           </div>
         </div>
       </section>
 
-      <!-- Court Documents -->
+      <!-- Scalability -->
       <section class="card fade-in mt-2 mb-3">
-        <h2>Gerichtsdokumente & Verfahrensschritte</h2>
-        <p>
-          Sobald Ihr Klageformblatt beim Gericht eingereicht ist, können Sie über
-          das Portal Dokumente vom Gericht hochladen. Das System analysiert den
-          Dokumenttyp und leitet Sie durch die nächsten Verfahrensschritte:
-        </p>
-        <ul class="doc-steps mt-1">
-          <li>Zustellungsbestätigung &rarr; Abwarten der Einlassungsfrist (30 Tage)</li>
-          <li>Verteidigungsschrift &rarr; Stellungnahme vorbereiten</li>
-          <li>Versäumnisurteil &rarr; Vollstreckung einleiten</li>
-          <li>Endurteil &rarr; Vollstreckungsbescheinigung beantragen</li>
-          <li>Vollstreckungsanordnung &rarr; Inkasso durchführen</li>
-        </ul>
+        <h2>{{ t('project.scalability') }}</h2>
+        <p>{{ t('project.scalabilityText') }}</p>
+        <div class="scale-features mt-2">
+          <div class="scale-item">
+            <strong>Mehrsprachig</strong>
+            <p>24 EU-Amtssprachen, automatische Spracherkennung</p>
+          </div>
+          <div class="scale-item">
+            <strong>Standardisiert</strong>
+            <p>EU-weit einheitliches Verfahren nach VO (EG) Nr. 861/2007</p>
+          </div>
+          <div class="scale-item">
+            <strong>Vollautomatisiert</strong>
+            <p>KI-gestützte Sachverhaltsaufnahme, Formularerstellung, Risikobewertung</p>
+          </div>
+          <div class="scale-item">
+            <strong>Adaptive Statistik</strong>
+            <p>Wahrscheinlichkeitsschätzungen verbessern sich mit jeder Fallentscheidung</p>
+          </div>
+        </div>
       </section>
     </div>
   </div>
@@ -221,6 +267,34 @@ const { t } = useI18nStore()
   font-size: 1.1rem;
 }
 
+/* KPI Row */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 16px;
+}
+
+.kpi-card {
+  text-align: center;
+  padding: 20px 12px;
+  background: var(--bg);
+  border-radius: var(--radius);
+  border: 2px solid var(--primary);
+}
+
+.kpi-value {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--primary);
+}
+
+.kpi-label {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+/* Process Flow */
 .process-flow {
   display: flex;
   align-items: flex-start;
@@ -259,6 +333,43 @@ const { t } = useI18nStore()
   color: var(--text-light);
   padding-top: 8px;
 }
+
+/* Architecture Diagram */
+.arch-diagram {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.arch-box {
+  flex: 1;
+  min-width: 160px;
+  max-width: 220px;
+  text-align: center;
+  padding: 20px 12px;
+  border-radius: var(--radius);
+  border: 2px solid var(--border);
+}
+
+.arch-app { border-color: var(--success); background: rgba(16, 185, 129, 0.05); }
+.arch-backend { border-color: var(--primary); background: rgba(79, 70, 229, 0.05); }
+.arch-portal { border-color: var(--warning); background: rgba(245, 158, 11, 0.05); }
+
+.arch-icon {
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: var(--primary);
+  margin-bottom: 8px;
+}
+
+.arch-app .arch-icon { color: var(--success); }
+.arch-portal .arch-icon { color: var(--warning); }
+
+.arch-box h4 { font-size: 0.95rem; margin-bottom: 4px; }
+.arch-box p { font-size: 0.78rem; color: var(--text-secondary); }
+.arch-arrow { font-size: 1.5rem; color: var(--text-light); }
 
 /* Probability tree */
 .prob-diagram {
@@ -384,18 +495,29 @@ const { t } = useI18nStore()
   margin-top: 4px;
 }
 
-/* Doc steps */
-.doc-steps {
-  list-style: none;
-  padding: 0;
+/* Scale features */
+.scale-features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
 }
 
-.doc-steps li {
-  padding: 10px 16px;
+.scale-item {
+  padding: 16px;
   background: var(--bg);
   border-radius: var(--radius);
-  margin-bottom: 8px;
-  font-size: 0.9rem;
   border-left: 3px solid var(--primary);
+}
+
+.scale-item strong {
+  display: block;
+  font-size: 0.95rem;
+  margin-bottom: 4px;
+}
+
+.scale-item p {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin: 0;
 }
 </style>

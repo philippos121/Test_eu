@@ -44,6 +44,43 @@
         </div>
       </section>
 
+      <!-- Example Completed Cases -->
+      <section class="card fade-in mt-3" v-if="exampleCases.length">
+        <div class="card-header">
+          <h2>{{ t('dashboard.exampleCases') }}</h2>
+          <router-link to="/statistics" class="btn btn-outline btn-sm">
+            {{ t('dashboard.viewStatistics') }}
+          </router-link>
+        </div>
+        <p class="text-secondary mb-2">{{ t('dashboard.exampleCasesDesc') }}</p>
+        <table class="example-table">
+          <thead>
+            <tr>
+              <th>{{ t('dashboard.caseLabel') }}</th>
+              <th>{{ t('dashboard.claimAmount') }}</th>
+              <th>{{ t('dashboard.outcome') }}</th>
+              <th>{{ t('dashboard.pCash') }}</th>
+              <th>{{ t('dashboard.netEv') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in exampleCases" :key="c.id">
+              <td>{{ c.title }}</td>
+              <td>{{ c.claim_amount?.toFixed(2) }} {{ c.claim_currency || 'EUR' }}</td>
+              <td>
+                <span :class="['badge', c.outcome_success ? 'badge-completed' : 'badge-rejected']">
+                  {{ c.outcome_success ? t('dashboard.successful') : t('dashboard.unsuccessful') }}
+                </span>
+              </td>
+              <td>{{ c.p_cash_success != null ? (c.p_cash_success * 100).toFixed(0) + '%' : '-' }}</td>
+              <td :class="c.net_ev >= 0 ? 'ev-positive' : 'ev-negative'">
+                {{ c.net_ev != null ? c.net_ev.toFixed(0) + ' EUR' : '-' }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
       <!-- Cases List -->
       <section class="cases-section mt-3 fade-in">
         <div class="card-header">
@@ -137,6 +174,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useCaseStore } from '../stores/case'
 import { useI18nStore } from '../stores/i18n'
+import api from '../services/api'
 
 const auth = useAuthStore()
 const caseStore = useCaseStore()
@@ -146,9 +184,21 @@ const router = useRouter()
 const showNewCaseDialog = ref(false)
 const newCaseTitle = ref('')
 const creatingCase = ref(false)
+const exampleCases = ref([])
+
+async function loadExampleCases() {
+  try {
+    const { data } = await api.get('/statistics/overview')
+    const allCompleted = data.completed_cases_detail || []
+    exampleCases.value = allCompleted.filter(c => !c.title.startsWith('[HIST]')).slice(0, 5)
+  } catch {
+    // Statistics may not be available yet
+  }
+}
 
 onMounted(() => {
   caseStore.fetchCases()
+  loadExampleCases()
 })
 
 async function handleCreateCase() {
@@ -311,6 +361,36 @@ function probabilityClass(p) {
 .prob-high { color: var(--success); font-weight: 600; }
 .prob-medium { color: var(--warning); font-weight: 600; }
 .prob-low { color: var(--danger); font-weight: 600; }
+
+/* Example Cases Table */
+.example-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.example-table th,
+.example-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.88rem;
+}
+
+.example-table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ev-positive { color: var(--success); font-weight: 600; }
+.ev-negative { color: var(--danger); font-weight: 600; }
+
+.btn-sm {
+  padding: 4px 12px;
+  font-size: 0.82rem;
+}
 
 /* Modal */
 .modal-overlay {

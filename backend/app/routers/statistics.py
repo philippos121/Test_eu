@@ -1,6 +1,5 @@
-"""Statistics & Bayesian Learning API — admin-only endpoints for
-completed-case analytics, seed data, prior updates, and expected-value
-calculations.
+"""Statistics API — admin-only endpoints for completed-case analytics,
+seed data, prior updates, and expected-value calculations.
 
 Endpoints:
   GET  /api/statistics/overview       — aggregate stats + posteriors + completed case detail
