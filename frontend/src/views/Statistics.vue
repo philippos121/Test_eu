@@ -86,13 +86,14 @@
         </div>
       </section>
 
-      <!-- Recent Completed Cases -->
-      <section class="card fade-in mt-2">
-        <h2>{{ t('stats.recentCases') }}</h2>
+      <!-- 5 Example Cases -->
+      <section class="card fade-in mt-2" v-if="exampleCases.length">
+        <h2>5 Beispielfälle</h2>
+        <p class="text-secondary mb-2">Repräsentative Fälle mit unterschiedlichen Ausgängen — stellvertretend für die 100 historischen Beobachtungen.</p>
         <table class="data-table">
           <thead>
             <tr>
-              <th>{{ t('dashboard.caseCount') }}</th>
+              <th>Fall</th>
               <th>{{ t('case.amount') }}</th>
               <th>{{ t('stats.outcome') }}</th>
               <th>p<sub>cash</sub></th>
@@ -100,7 +101,7 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="c in completedCases" :key="c.id">
+            <tr v-for="c in exampleCases" :key="c.id">
               <td>{{ c.title }}</td>
               <td>{{ c.claim_amount?.toFixed(2) }} {{ c.claim_currency || 'EUR' }}</td>
               <td>
@@ -113,7 +114,40 @@
                 {{ c.net_ev != null ? c.net_ev.toFixed(0) + ' EUR' : '-' }}
               </td>
             </tr>
-            <tr v-if="!completedCases.length">
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Historical Cases Summary -->
+      <section class="card fade-in mt-2" v-if="histCases.length">
+        <h2>{{ t('stats.recentCases') }} (100 historische Fälle)</h2>
+        <p class="text-secondary mb-2">Zusammenfassung der 100 historischen Fälle, aus denen die Posteriors berechnet werden.</p>
+        <div class="hist-summary">
+          <div class="hist-stat">
+            <span class="hist-number">{{ histCases.length }}</span>
+            <span class="hist-label">Fälle gesamt</span>
+          </div>
+          <div class="hist-stat">
+            <span class="hist-number success">{{ histCases.filter(c => c.outcome_success).length }}</span>
+            <span class="hist-label">Erfolgreich (bezahlt)</span>
+          </div>
+          <div class="hist-stat">
+            <span class="hist-number danger">{{ histCases.filter(c => !c.outcome_success).length }}</span>
+            <span class="hist-label">Nicht erfolgreich</span>
+          </div>
+          <div class="hist-stat">
+            <span class="hist-number">{{ histCases.length > 0 ? (histCases.filter(c => c.outcome_success).length / histCases.length * 100).toFixed(0) + '%' : '-' }}</span>
+            <span class="hist-label">Erfolgsrate</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Fallback if no data -->
+      <section class="card fade-in mt-2" v-if="!exampleCases.length && !histCases.length">
+        <h2>{{ t('stats.recentCases') }}</h2>
+        <table class="data-table">
+          <tbody>
+            <tr>
               <td colspan="5" class="text-center text-secondary">{{ t('stats.noCompleted') }}</td>
             </tr>
           </tbody>
@@ -149,7 +183,8 @@ const { t } = useI18nStore()
 
 const stats = ref({})
 const posteriors = ref([])
-const completedCases = ref([])
+const exampleCases = ref([])
+const histCases = ref([])
 const learningInsights = ref([])
 const seeding = ref(false)
 const updatingPriors = ref(false)
@@ -160,8 +195,10 @@ async function loadStats() {
     const { data } = await api.get('/statistics/overview')
     stats.value = data
     posteriors.value = data.posteriors || []
-    completedCases.value = data.completed_cases_detail || []
     learningInsights.value = data.learning_insights || []
+    const all = data.completed_cases_detail || []
+    exampleCases.value = all.filter(c => !c.title.startsWith('[HIST]'))
+    histCases.value = all.filter(c => c.title.startsWith('[HIST]'))
   } catch {
     // Stats endpoint may not exist yet
   }
@@ -338,5 +375,36 @@ onMounted(loadStats)
   font-size: 0.85rem;
   color: var(--text-primary);
   margin: 0;
+}
+
+/* Historical Summary */
+.hist-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 16px;
+}
+
+.hist-stat {
+  text-align: center;
+  padding: 16px;
+  background: var(--bg-secondary, #fafafa);
+  border-radius: var(--radius);
+}
+
+.hist-number {
+  display: block;
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: var(--primary);
+}
+
+.hist-number.success { color: var(--success); }
+.hist-number.danger { color: var(--danger); }
+
+.hist-label {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin-top: 4px;
 }
 </style>

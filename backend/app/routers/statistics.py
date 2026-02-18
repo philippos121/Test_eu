@@ -17,7 +17,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import delete, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import get_current_user
@@ -26,8 +26,11 @@ from ..models import (
     Case,
     CaseEvent,
     CaseEventType,
+    CaseLLMTrace,
     CaseProcessScore,
     CaseStatus,
+    ChatMessage,
+    Document,
     PriorsConfig,
     User,
 )
@@ -1014,33 +1017,51 @@ async def seed_demo_data(
 ):
     """Seed 5 fictional completed cases + 100 historical observation cases.
 
-    Idempotent: skips cases whose title already exists and skips historical
-    seeding if ``[HIST]`` cases are already present.
+    Always recreates: deletes old seed data first to ensure exactly 5 fictional
+    cases and 100 historical cases exist with current definitions.
     """
     try:
-        # Check if historical data already seeded
-        hist_check = await db.execute(
-            select(func.count(Case.id)).where(Case.title.like("[HIST]%"))
-        )
-        hist_exists = (hist_check.scalar() or 0) > 0
-
-        fictional_count = 0
-        historical_event_count = 0
-
-        # ── 5 fictional cases ──
+        # ── Build seed data ──
         seed_data = _build_seed_cases(admin.id)
-        for item in seed_data:
-            existing = await db.execute(
-                select(func.count(Case.id)).where(Case.title == item["case"].title)
-            )
-            if (existing.scalar() or 0) > 0:
-                continue
+        seed_titles = [item["case"].title for item in seed_data]
 
+        # ── Delete old fictional seed cases (by matching titles) ──
+        old_fictional_result = await db.execute(
+            select(Case.id).where(Case.title.in_(seed_titles))
+        )
+        old_fictional_ids = list(old_fictional_result.scalars().all())
+
+        if old_fictional_ids:
+            await db.execute(delete(CaseEvent).where(CaseEvent.case_id.in_(old_fictional_ids)))
+            await db.execute(delete(CaseProcessScore).where(CaseProcessScore.case_id.in_(old_fictional_ids)))
+            await db.execute(delete(CaseLLMTrace).where(CaseLLMTrace.case_id.in_(old_fictional_ids)))
+            await db.execute(delete(ChatMessage).where(ChatMessage.case_id.in_(old_fictional_ids)))
+            await db.execute(delete(Document).where(Document.case_id.in_(old_fictional_ids)))
+            await db.execute(delete(Case).where(Case.id.in_(old_fictional_ids)))
+
+        # ── Delete old historical seed cases ──
+        old_hist_result = await db.execute(
+            select(Case.id).where(Case.title.like("[HIST]%"))
+        )
+        old_hist_ids = list(old_hist_result.scalars().all())
+
+        if old_hist_ids:
+            # Delete in batches to avoid query size limits
+            for i in range(0, len(old_hist_ids), 50):
+                batch = old_hist_ids[i:i + 50]
+                await db.execute(delete(CaseEvent).where(CaseEvent.case_id.in_(batch)))
+                await db.execute(delete(CaseProcessScore).where(CaseProcessScore.case_id.in_(batch)))
+                await db.execute(delete(Case).where(Case.id.in_(batch)))
+
+        await db.flush()
+
+        # ── Create 5 fictional cases ──
+        fictional_count = 0
+        for item in seed_data:
             db.add(item["case"])
             for event in item["events"]:
                 db.add(event)
 
-            # Create a process score snapshot
             overrides = item["score_overrides"]
             score = CaseProcessScore(
                 case_id=item["case"].id,
@@ -1065,28 +1086,24 @@ async def seed_demo_data(
             db.add(score)
             fictional_count += 1
 
-        # ── 100 historical cases ──
-        if not hist_exists:
-            hist_cases, hist_events = _build_historical_events(admin.id)
-            for c in hist_cases:
-                db.add(c)
-            for e in hist_events:
-                db.add(e)
-            historical_event_count = len(hist_events)
-        else:
-            historical_event_count = -1  # signal: already existed
+        # ── Create 100 historical cases ──
+        hist_cases, hist_events = _build_historical_events(admin.id)
+        for c in hist_cases:
+            db.add(c)
+        for e in hist_events:
+            db.add(e)
+        historical_event_count = len(hist_events)
 
         await db.commit()
 
-        msg = f"{fictional_count} fiktive Fälle erstellt."
-        if historical_event_count == -1:
-            msg += " Historische Daten waren bereits vorhanden."
-        else:
-            msg += f" {historical_event_count} historische Events aus 100 Fällen erstellt."
+        msg = (
+            f"{fictional_count} fiktive Fälle und 100 historische Fälle "
+            f"({historical_event_count} Events) erstellt."
+        )
 
         return SeedResponse(
             fictional_cases_created=fictional_count,
-            historical_aggregate_events_created=max(0, historical_event_count),
+            historical_aggregate_events_created=historical_event_count,
             message=msg,
         )
 
