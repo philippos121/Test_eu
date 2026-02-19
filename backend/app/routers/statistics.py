@@ -125,10 +125,9 @@ def _is_successful(events: list[CaseEvent]) -> bool:
 
 
 RATE_LABELS: dict[str, str] = {
-    "served": "Zustellungsrate",
-    "default": "Versäumnisrate",
-    "settle": "Vergleichsrate",
-    "collect": "Inkassorate",
+    "valid":    "Anspruchs-Gültigkeitsrate",
+    "provable": "Beweisbarkeitsrate",
+    "payment":  "Zahlungsrate",
 }
 
 
@@ -270,7 +269,7 @@ async def statistics_overview(
         flat_events.extend(evts)
 
     posteriors: list[PosteriorItem] = []
-    for rate_name in ["served", "default", "settle", "collect"]:
+    for rate_name in ["valid", "provable", "payment"]:
         prior_alpha, prior_beta = DEFAULT_PRIORS.get(rate_name, (2.0, 2.0))
         successes, trials = count_events(flat_events, rate_name)
         post = bayes_update(prior_alpha, prior_beta, successes, trials)
@@ -1024,7 +1023,7 @@ async def update_priors_from_outcomes(
         rates_updated: list[str] = []
         priors_items: list[UpdatedPriorItem] = []
 
-        for rate_name in ["served", "default", "settle", "collect"]:
+        for rate_name in ["valid", "provable", "payment"]:
             mapping = RATE_EVENT_MAP.get(rate_name, {})
             success_types = mapping.get("success", set())
             failure_types = mapping.get("failure", set())

@@ -250,7 +250,17 @@ class CaseProcessScore(Base):
     willingness_score = Column(Float, default=50)
     willingness_components = Column(JSONB, default=dict)
 
-    # 6 probabilities
+    # v3 pillars (nullable so pre-existing v2 rows are unaffected)
+    p_claim_valid    = Column(Float, nullable=True)   # P(entstanden AND nicht untergegangen AND durchsetzbar)
+    p_claim_provable = Column(Float, nullable=True)   # P(beweisbar | valid)
+    p_payment        = Column(Float, nullable=True)   # P(Zahlung | judgment won)
+
+    # v3 detailed breakdowns
+    legal_validity_json   = Column(JSONB, nullable=True)   # LLM legal analysis + stat blend
+    provability_json      = Column(JSONB, nullable=True)   # evidence score + stat blend
+    payment_analysis_json = Column(JSONB, nullable=True)   # ability + willingness + stat blend
+
+    # v2 legacy probabilities (kept for backward compat, not populated in v3)
     p_served = Column(Float, default=0.5)
     p_default = Column(Float, default=0.5)
     p_win_contested = Column(Float, default=0.5)

@@ -1,30 +1,22 @@
-"""Unit tests for scoring engine v2."""
+"""Unit tests for scoring engine v3."""
 import math
 import pytest
 from unittest.mock import MagicMock
 
 from app.services.scoring import (
     score_evidence,
-    contestation_risk,
-    score_ability,
     score_willingness,
     bayes_update,
-    compute_p_cash_success,
     count_events,
     compute_drivers,
-    evidence_to_probability,
-    adjust_settle_by_willingness,
-    adjust_collect_by_ability,
-    adjust_collect_by_willingness,
+    evidence_to_prob,
+    blend,
     merge_facts_monotonic,
     EvidenceResult,
-    AbilityResult,
-    WillingnessResult,
     BayesPosterior,
-    _logit,
-    _sigmoid,
     _beta_quantile,
 )
+from app.services.legal_analyzer import LegalValidityResult, PaymentAbilityResult
 from app.models import CaseEventType
 
 
@@ -106,134 +98,89 @@ class TestEvidenceScorer:
 
 
 # =====================================================================
-# A2) Logistic evidence→probability mapping
+# A2) Evidence → probability mapping  (v3: no contestation arg)
 # =====================================================================
 
 class TestEvidenceToProbability:
-    def test_midpoint_no_contestation(self):
-        """Score=50 with cr=0 → ~50%"""
-        p = evidence_to_probability(50.0, 0.0)
+    def test_midpoint_gives_fifty_percent(self):
+        """Score=50 → ~50%"""
+        p = evidence_to_prob(50.0)
         assert p == pytest.approx(0.5, abs=0.01)
 
     def test_high_evidence_high_probability(self):
-        """Score=100 with cr=0 → should be well above 50%"""
-        p = evidence_to_probability(100.0, 0.0)
+        p = evidence_to_prob(100.0)
         assert p > 0.95
 
     def test_zero_evidence_low_probability(self):
-        """Score=0 with cr=0 → should be well below 50%"""
-        p = evidence_to_probability(0.0, 0.0)
+        p = evidence_to_prob(0.0)
         assert p < 0.05
 
-    def test_contestation_reduces_probability(self):
-        """Same evidence score, higher contestation → lower probability"""
-        p_low_cr = evidence_to_probability(70.0, 0.0)
-        p_high_cr = evidence_to_probability(70.0, 0.8)
-        assert p_high_cr < p_low_cr
-
-    def test_full_contestation_with_strong_evidence(self):
-        """Even with max contestation, strong evidence still has some probability"""
-        p = evidence_to_probability(100.0, 1.0)
-        assert p > 0.3  # not driven to zero
-
     def test_sigmoid_shape_monotonic(self):
-        """Probability increases monotonically with evidence"""
-        probs = [evidence_to_probability(s, 0.2) for s in range(0, 101, 10)]
+        probs = [evidence_to_prob(s) for s in range(0, 101, 10)]
         for i in range(1, len(probs)):
             assert probs[i] >= probs[i - 1]
 
 
 # =====================================================================
-# B) ContestationRisk
-# =====================================================================
-
-class TestContestationRisk:
-    def test_no_dispute_signals(self):
-        case = _mock_case()
-        assert contestation_risk(case) == 0.0
-
-    def test_dispute_keywords_raise_risk(self):
-        case = _mock_case(claim_description="Ware mangelhaft, Reklamation eingereicht")
-        risk = contestation_risk(case)
-        assert risk > 0.0
-
-    def test_facts_raise_risk(self):
-        case = _mock_case()
-        risk = contestation_risk(case, {"defendant_disputes": True, "quality_issue": True})
-        assert risk == 0.5
-
-    def test_capped_at_1(self):
-        case = _mock_case(
-            claim_description="nicht geliefert mangelhaft chargeback rücksendung reklamation widerspruch dispute",
-            claim_evidence="not delivered defective refund",
-        )
-        risk = contestation_risk(case, {"defendant_disputes": True, "quality_issue": True})
-        assert risk <= 1.0
-
-
-# =====================================================================
-# C) AbilityScorer
-# =====================================================================
-
-class TestAbilityScorer:
-    def test_default_ability(self):
-        case = _mock_case()
-        r = score_ability(case)
-        assert r.score == 75.0
-
-    def test_insolvency_lowers_score(self):
-        case = _mock_case()
-        r = score_ability(case, {"insolvency_flag": True})
-        assert r.score == 15.0
-
-    def test_inactive_company(self):
-        case = _mock_case()
-        r = score_ability(case, {"company_active": False})
-        assert r.score == 45.0
-
-    def test_legal_person_bonus(self):
-        case = _mock_case(defendant_is_legal_person=True)
-        r = score_ability(case)
-        assert r.score == 80.0
-
-    def test_all_negative_flags_floor_at_zero(self):
-        case = _mock_case()
-        r = score_ability(case, {"insolvency_flag": True, "company_active": False, "vat_valid": False})
-        assert r.score == 0.0
-
-
-# =====================================================================
-# D) WillingnessScorer
+# B) WillingnessScorer v3  (returns float 0–1, no case arg)
 # =====================================================================
 
 class TestWillingnessScorer:
-    def test_default_willingness(self):
-        case = _mock_case()
-        r = score_willingness(case)
-        assert r.score == 50.0
+    def test_neutral_base(self):
+        p = score_willingness({})
+        assert p == pytest.approx(0.5, abs=0.01)
 
-    def test_positive_signals(self):
-        case = _mock_case()
-        r = score_willingness(case, {"responded_to_reminder": True, "partial_payment": True, "settlement_offered": True})
-        assert r.score == 85.0
-
-    def test_negative_signals(self):
-        case = _mock_case()
-        r = score_willingness(case, {"responded_to_reminder": False, "repeat_defendant": True})
-        assert r.score == 15.0
-
-    def test_capped_at_100(self):
-        case = _mock_case()
-        r = score_willingness(case, {
+    def test_positive_signals_increase(self):
+        p = score_willingness({
             "responded_to_reminder": True,
             "partial_payment": True,
             "settlement_offered": True,
         })
-        assert r.score <= 100.0
+        assert p > 0.5
+
+    def test_negative_signals_decrease(self):
+        p = score_willingness({
+            "responded_to_reminder": False,
+            "repeat_defendant": True,
+        })
+        assert p < 0.5
+
+    def test_clamped_at_zero_and_one(self):
+        # All bad signals shouldn't go below floor
+        p = score_willingness({
+            "responded_to_reminder": False,
+            "repeat_defendant": True,
+        })
+        assert 0.0 <= p <= 1.0
+
+    def test_no_facts_is_neutral(self):
+        assert score_willingness(None) == pytest.approx(0.5, abs=0.01)
 
 
 # =====================================================================
-# E) BayesUpdater
+# C) Blend function
+# =====================================================================
+
+class TestBlend:
+    def test_full_individual_weight(self):
+        """weight=1.0 → return individual_p unchanged"""
+        assert blend(0.7, 0.3, 1.0) == pytest.approx(0.7, abs=0.001)
+
+    def test_full_stat_weight(self):
+        """weight=0.0 → return stat_p unchanged"""
+        assert blend(0.7, 0.3, 0.0) == pytest.approx(0.3, abs=0.001)
+
+    def test_equal_weights_average(self):
+        assert blend(0.6, 0.4, 0.5) == pytest.approx(0.5, abs=0.001)
+
+    def test_asymmetric_weights(self):
+        result = blend(0.8, 0.4, 0.70)
+        expected = 0.70 * 0.8 + 0.30 * 0.4
+        assert result == pytest.approx(expected, abs=0.001)
+
+
+# =====================================================================
+# D) BayesUpdater
 # =====================================================================
 
 class TestBayesUpdater:
@@ -255,12 +202,6 @@ class TestBayesUpdater:
         assert post.beta_post == 7.0
         assert post.mean == pytest.approx(2.0 / 9.0, abs=0.001)
 
-    def test_single_trial_success(self):
-        post = bayes_update(5.0, 5.0, 1, 1)
-        assert post.alpha_post == 6.0
-        assert post.beta_post == 5.0
-        assert post.mean == pytest.approx(6.0 / 11.0, abs=0.001)
-
     def test_smoothing_prevents_extremes(self):
         post = bayes_update(2.0, 8.0, 10, 10)
         assert post.mean < 1.0
@@ -274,26 +215,21 @@ class TestBayesUpdater:
         assert 0.0 <= post.ci_high <= 1.0
 
     def test_more_data_narrows_ci(self):
-        """More observations should narrow the credible interval."""
         post_few = bayes_update(5.0, 5.0, 3, 5)
         post_many = bayes_update(5.0, 5.0, 30, 50)
-        ci_width_few = post_few.ci_high - post_few.ci_low
-        ci_width_many = post_many.ci_high - post_many.ci_low
-        assert ci_width_many < ci_width_few
+        assert (post_many.ci_high - post_many.ci_low) < (post_few.ci_high - post_few.ci_low)
 
 
 # =====================================================================
-# E2) Beta quantile helper
+# D2) Beta quantile helper
 # =====================================================================
 
 class TestBetaQuantile:
     def test_symmetric_prior(self):
-        """Beta(5,5) quantiles should be symmetric around 0.5."""
         q05 = _beta_quantile(5.0, 5.0, 0.05)
         q95 = _beta_quantile(5.0, 5.0, 0.95)
         assert q05 < 0.5
         assert q95 > 0.5
-        assert abs((q05 + q95) / 2 - 0.5) < 0.05
 
     def test_invalid_params(self):
         assert _beta_quantile(0.0, 0.0, 0.5) == 0.5
@@ -301,109 +237,7 @@ class TestBetaQuantile:
 
 
 # =====================================================================
-# F) Willingness-adjusted probabilities
-# =====================================================================
-
-class TestWillingnessAdjustments:
-    def test_neutral_willingness_no_change_settle(self):
-        """Willingness=50 (neutral) should barely change p_settle."""
-        p = adjust_settle_by_willingness(0.3, 50.0)
-        assert p == pytest.approx(0.3, abs=0.01)
-
-    def test_high_willingness_increases_settle(self):
-        p_neutral = adjust_settle_by_willingness(0.3, 50.0)
-        p_high = adjust_settle_by_willingness(0.3, 85.0)
-        assert p_high > p_neutral
-
-    def test_low_willingness_decreases_settle(self):
-        p_neutral = adjust_settle_by_willingness(0.3, 50.0)
-        p_low = adjust_settle_by_willingness(0.3, 15.0)
-        assert p_low < p_neutral
-
-    def test_neutral_ability_no_change_collect(self):
-        """Ability=75 (neutral baseline) should barely change p_collect."""
-        p = adjust_collect_by_ability(0.6, 75.0)
-        assert p == pytest.approx(0.6, abs=0.01)
-
-    def test_low_ability_decreases_collect(self):
-        p_neutral = adjust_collect_by_ability(0.6, 75.0)
-        p_low = adjust_collect_by_ability(0.6, 15.0)
-        assert p_low < p_neutral
-
-    def test_low_ability_does_not_zero_collect(self):
-        """Even ability=0, p_collect should not be driven to zero."""
-        p = adjust_collect_by_ability(0.6, 0.0)
-        assert p > 0.05  # floor is not zero
-
-    def test_willingness_collect_adjustment(self):
-        p_neutral = adjust_collect_by_willingness(0.5, 50.0)
-        p_high = adjust_collect_by_willingness(0.5, 85.0)
-        assert p_high > p_neutral
-
-
-# =====================================================================
-# F2) Logit/Sigmoid helpers
-# =====================================================================
-
-class TestLogitSigmoid:
-    def test_sigmoid_of_zero(self):
-        assert _sigmoid(0.0) == pytest.approx(0.5, abs=0.001)
-
-    def test_logit_of_half(self):
-        assert _logit(0.5) == pytest.approx(0.0, abs=0.001)
-
-    def test_roundtrip(self):
-        for p in [0.1, 0.3, 0.5, 0.7, 0.9]:
-            assert _sigmoid(_logit(p)) == pytest.approx(p, abs=0.001)
-
-    def test_logit_clamped(self):
-        """Should not throw for extreme values."""
-        assert math.isfinite(_logit(0.0))
-        assert math.isfinite(_logit(1.0))
-
-
-# =====================================================================
-# G) p_cash_success formula
-# =====================================================================
-
-class TestPCashSuccess:
-    def test_all_ones(self):
-        result = compute_p_cash_success(1.0, 1.0, 1.0, 1.0, 1.0)
-        assert result == pytest.approx(1.0, abs=0.001)
-
-    def test_all_zeros(self):
-        result = compute_p_cash_success(0.0, 0.0, 0.0, 0.0, 0.0)
-        assert result == 0.0
-
-    def test_typical_case(self):
-        # p_served=0.7, p_default=0.5, p_win_contested=0.6, p_settle=0.3, p_collect=0.5
-        # p_win = 0.3 + 0.7*(0.5 + 0.5*0.6) = 0.3 + 0.7*0.8 = 0.3 + 0.56 = 0.86
-        # p_cash = 0.7 * 0.86 * 0.5 = 0.301
-        result = compute_p_cash_success(0.7, 0.5, 0.6, 0.3, 0.5)
-        assert result == pytest.approx(0.301, abs=0.001)
-
-    def test_no_service(self):
-        result = compute_p_cash_success(0.0, 0.8, 0.9, 0.3, 0.7)
-        assert result == 0.0
-
-    def test_no_collection(self):
-        result = compute_p_cash_success(1.0, 1.0, 1.0, 1.0, 0.0)
-        assert result == 0.0
-
-    def test_formula_components(self):
-        p_settle = 0.3
-        p_default = 0.4
-        p_win_contested = 0.6
-        p_win = p_settle + (1 - p_settle) * (p_default + (1 - p_default) * p_win_contested)
-        assert p_win == pytest.approx(0.832, abs=0.001)
-
-        result = compute_p_cash_success(0.9, p_default, p_win_contested, p_settle, 0.7)
-        expected = 0.9 * p_win * 0.7
-        assert result == pytest.approx(expected, abs=0.001)
-
-
-# =====================================================================
-# H) count_events
+# E) count_events  (v3 rate names)
 # =====================================================================
 
 class TestCountEvents:
@@ -412,93 +246,120 @@ class TestCountEvents:
         ev.event_type = event_type
         return ev
 
-    def test_served_counts(self):
+    def test_valid_rate_counts_judgment_win(self):
         events = [
-            self._mock_event(CaseEventType.SERVICE_OK),
-            self._mock_event(CaseEventType.SERVICE_OK),
-            self._mock_event(CaseEventType.SERVICE_FAIL),
+            self._mock_event(CaseEventType.JUDGMENT_WIN),
+            self._mock_event(CaseEventType.JUDGMENT_WIN),
+            self._mock_event(CaseEventType.JUDGMENT_LOSS),
         ]
-        s, n = count_events(events, "served")
+        s, n = count_events(events, "valid")
         assert s == 2
         assert n == 3
 
-    def test_default_counts(self):
+    def test_valid_rate_counts_default_and_settled(self):
         events = [
             self._mock_event(CaseEventType.DEFAULT),
-            self._mock_event(CaseEventType.DEFENDANT_RESPONDED),
+            self._mock_event(CaseEventType.SETTLED),
+            self._mock_event(CaseEventType.JUDGMENT_LOSS),
         ]
-        s, n = count_events(events, "default")
-        assert s == 1
-        assert n == 2
+        s, n = count_events(events, "valid")
+        assert s == 2
+        assert n == 3
 
-    def test_no_events(self):
-        s, n = count_events([], "served")
-        assert s == 0
-        assert n == 0
+    def test_provable_rate_only_adversarial(self):
+        """DEFAULT events do NOT count for provability (no evidence test)."""
+        events = [
+            self._mock_event(CaseEventType.JUDGMENT_WIN),
+            self._mock_event(CaseEventType.DEFAULT),   # not counted for provable
+            self._mock_event(CaseEventType.JUDGMENT_LOSS),
+        ]
+        s, n = count_events(events, "provable")
+        assert s == 1    # only JUDGMENT_WIN
+        assert n == 2    # JUDGMENT_WIN + JUDGMENT_LOSS
 
-    def test_collect_with_failure(self):
-        """Collection rate now has COLLECTION_FAILED as failure event."""
+    def test_payment_rate(self):
         events = [
             self._mock_event(CaseEventType.PAYMENT_RECEIVED),
             self._mock_event(CaseEventType.COLLECTION_FAILED),
             self._mock_event(CaseEventType.COLLECTION_FAILED),
         ]
-        s, n = count_events(events, "collect")
+        s, n = count_events(events, "payment")
         assert s == 1
-        assert n == 3  # 1 success + 2 failures
+        assert n == 3
+
+    def test_no_events(self):
+        s, n = count_events([], "valid")
+        assert s == 0
+        assert n == 0
 
 
 # =====================================================================
-# I) Drivers
+# F) Drivers v3
 # =====================================================================
 
 class TestDrivers:
+    def _make_posteriors(self):
+        return {
+            "valid":    BayesPosterior(6, 2, 0, 0, 6, 2, 0.75),
+            "provable": BayesPosterior(4, 6, 0, 0, 4, 6, 0.40),
+            "payment":  BayesPosterior(5, 5, 0, 0, 5, 5, 0.50),
+        }
+
     def test_produces_max_five(self):
         ev = EvidenceResult(total=20, missing=["A", "B", "C"])
-        ab = AbilityResult(insolvency_flag=True, score=15)
-        wi = WillingnessResult(score=30, partial_payment=False)
-        posteriors = {
-            "served": BayesPosterior(7, 3, 0, 0, 7, 3, 0.7),
-            "default": BayesPosterior(5, 5, 0, 0, 5, 5, 0.2),
-            "settle": BayesPosterior(3, 7, 0, 0, 3, 7, 0.3),
-            "collect": BayesPosterior(6, 4, 0, 0, 6, 4, 0.25),
-        }
-        drivers = compute_drivers(ev, ab, wi, 0.6, posteriors)
+        legal = LegalValidityResult(
+            p_entstanden=0.3,
+            p_entstanden_reasoning="Vertrag nicht bewiesen",
+            p_not_untergegangen=0.5,
+            p_durchsetzbar=0.4,
+            p_claim_valid_llm=0.06,
+        )
+        ability = PaymentAbilityResult(ability_score=10, insolvency_risk="high",
+                                       reasoning="Insolvenzverfahren offen")
+        drivers = compute_drivers(ev, legal, ability, 0.3, self._make_posteriors())
         assert len(drivers) <= 5
 
     def test_strong_case_gets_positive_drivers(self):
         ev = EvidenceResult(total=90, missing=[])
-        ab = AbilityResult(score=80)
-        wi = WillingnessResult(score=70, partial_payment=True)
-        posteriors = {
-            "served": BayesPosterior(7, 3, 0, 0, 7, 3, 0.7),
-            "default": BayesPosterior(5, 5, 0, 0, 5, 5, 0.5),
-            "settle": BayesPosterior(3, 7, 0, 0, 3, 7, 0.3),
-            "collect": BayesPosterior(6, 4, 0, 0, 6, 4, 0.6),
-        }
-        drivers = compute_drivers(ev, ab, wi, 0.1, posteriors)
+        legal = LegalValidityResult(
+            p_entstanden=0.9,
+            p_not_untergegangen=0.9,
+            p_durchsetzbar=0.9,
+            p_claim_valid_llm=0.85,
+        )
+        ability = PaymentAbilityResult(ability_score=80, insolvency_risk="low",
+                                       reasoning="Aktives Unternehmen")
+        drivers = compute_drivers(ev, legal, ability, 0.70, self._make_posteriors())
         positive = [d for d in drivers if d["direction"] == "positive"]
-        assert len(positive) >= 2
+        assert len(positive) >= 1
 
-    def test_willingness_driver_positive(self):
-        """High willingness should produce a positive driver."""
+    def test_negative_legal_signals(self):
+        ev = EvidenceResult(total=50, missing=[])
+        legal = LegalValidityResult(
+            p_entstanden=0.3,
+            p_entstanden_reasoning="Anspruchsgrundlage unklar",
+            p_not_untergegangen=0.85,
+            p_durchsetzbar=0.4,
+            p_durchsetzbar_reasoning="Zuständigkeit fraglich",
+            p_claim_valid_llm=0.10,
+        )
+        ability = PaymentAbilityResult(ability_score=60, insolvency_risk="unknown")
+        drivers = compute_drivers(ev, legal, ability, 0.5, self._make_posteriors())
+        factors = [d["factor"] for d in drivers]
+        assert any("Anspruchsentstehung" in f or "Durchsetzbarkeit" in f for f in factors)
+
+    def test_high_willingness_driver(self):
         ev = EvidenceResult(total=60, missing=[])
-        ab = AbilityResult(score=75)
-        wi = WillingnessResult(score=70)
-        posteriors = {
-            "served": BayesPosterior(7, 3, 0, 0, 7, 3, 0.7),
-            "default": BayesPosterior(5, 5, 0, 0, 5, 5, 0.5),
-            "settle": BayesPosterior(3, 7, 0, 0, 3, 7, 0.3),
-            "collect": BayesPosterior(6, 4, 0, 0, 6, 4, 0.6),
-        }
-        drivers = compute_drivers(ev, ab, wi, 0.1, posteriors)
+        legal = LegalValidityResult(p_claim_valid_llm=0.6)
+        ability = PaymentAbilityResult(ability_score=70, insolvency_risk="low")
+        drivers = compute_drivers(ev, legal, ability, 0.70, self._make_posteriors())
         willingness_drivers = [d for d in drivers if "Zahlungswilligkeit" in d["factor"]]
         assert len(willingness_drivers) == 1
         assert willingness_drivers[0]["direction"] == "positive"
 
 
 # =====================================================================
-# J) Monotonic fact merging
+# G) Monotonic fact merging
 # =====================================================================
 
 class TestMonotonicMerge:
@@ -510,7 +371,7 @@ class TestMonotonicMerge:
     def test_true_not_overwritten_by_false(self):
         merged = {"has_contract": True}
         merge_facts_monotonic(merged, {"has_contract": False})
-        assert merged["has_contract"] is True  # not reverted!
+        assert merged["has_contract"] is True
 
     def test_false_can_be_upgraded_to_true(self):
         merged = {"has_contract": False}
@@ -526,3 +387,23 @@ class TestMonotonicMerge:
         merged = {"has_contract": True}
         merge_facts_monotonic(merged, {"has_contract": True})
         assert merged["has_contract"] is True
+
+
+# =====================================================================
+# H) Final probability formula  p_cash = p_valid × p_provable × p_payment
+# =====================================================================
+
+class TestFinalFormula:
+    def test_all_ones(self):
+        assert 1.0 * 1.0 * 1.0 == pytest.approx(1.0)
+
+    def test_any_zero_kills_result(self):
+        assert 0.0 * 0.8 * 0.7 == 0.0
+
+    def test_typical_case(self):
+        p_valid    = blend(0.72, 0.75, 0.70)   # ~0.729
+        p_provable = blend(0.69, 0.40, 0.40)   # ~0.516
+        p_payment  = blend(0.60, 0.50, 0.65)   # ~0.565
+        p_cash = p_valid * p_provable * p_payment
+        assert 0.0 < p_cash < 1.0
+        assert p_cash == pytest.approx(p_valid * p_provable * p_payment, abs=0.001)

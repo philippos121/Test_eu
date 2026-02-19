@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o"
 
+    tavily_api_key: str = ""  # Optional: enables real-time web search in legal analysis
+
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 
     generated_forms_dir: str = "generated_forms"
