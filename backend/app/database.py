@@ -52,8 +52,16 @@ def _sync_fix_null_defaults(conn):
                 ))
 
 
+def _sync_add_missing_enum_values(conn):
+    """Add enum values that exist in Python models but are missing from DB enum types."""
+    conn.execute(text(
+        "ALTER TYPE caseeventtype ADD VALUE IF NOT EXISTS 'COLLECTION_FAILED'"
+    ))
+
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_sync_add_missing_enum_values)
         await conn.run_sync(_sync_add_missing_columns)
         await conn.run_sync(_sync_fix_null_defaults)
