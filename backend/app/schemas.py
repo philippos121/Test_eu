@@ -435,7 +435,7 @@ class NNTrainResponse(BaseModel):
 class NNCasePrediction(BaseModel):
     case_id: str
     case_title: str
-    features: dict
+    features: Optional[dict] = None
     p_nn: float
     actual_outcome: Optional[float] = None
     correct: Optional[bool] = None

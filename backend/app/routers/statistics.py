@@ -16,9 +16,9 @@ from datetime import datetime, timedelta
 from typing import Any, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import get_current_user
@@ -771,52 +771,27 @@ def _build_seed_cases(admin_user_id: UUID) -> list[dict]:
     return cases
 
 
-def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[CaseEvent]]:
-    """Generate 100 historical observation cases with realistic event distributions.
+def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[CaseEvent]]:  # noqa: C901
+    """Generate 100 historical cases with rich, outcome-correlated features for NN training.
 
-    Target rates:
-      - ~70% service success rate  (70 SERVICE_OK, 30 SERVICE_FAIL)
-      - ~50% default rate          (35 DEFAULT, 35 DEFENDANT_RESPONDED of 70 served)
-      - ~30% settlement rate       (11 SETTLED of 35 responded)
-      - ~60% collection rate       (30 PAYMENT_RECEIVED of ~49 favorable outcomes)
+    Outcome distribution (70 cases in NN training set, 30 REJECTED excluded):
+      Group 1  (30) service_fail  → REJECTED, no NN label
+      Group 2  (30) default+collected       → outcome 1.0  (strong evidence, no insolvency)
+      Group 3  ( 5) default+coll.failed     → outcome 0.0  (insolvency, eastern-EU)
+      Group 4  (11) settled+payment         → outcome 0.7  (quality dispute, cross-border)
+      Group 6  (14) win+coll.failed         → outcome 0.0  (insolvency / unreachable)
+      Group 7  (10) judgment_loss           → outcome 0.0  (weak/oral evidence)
 
-    Each historical case gets a ``[HIST]`` title prefix for easy identification.
+    Each case carries realistic German-language text so that nn_service.extract_features()
+    produces a meaningful 20-dim feature vector correlated with the outcome.
     """
     now = datetime.utcnow()
     all_cases: list[Case] = []
     all_events: list[CaseEvent] = []
 
-    total = 100
-    served_ok = 70
-    served_fail = 30
-    defaulted = 35          # of 70 served
-    responded = 35          # of 70 served
-    settled = 11            # of 35 responded (~30%)
-    judgment = 24           # responded - settled
-    judgment_win = 14       # of 24 judgment
-    judgment_loss = 10      # of 24 judgment
-    collected = 30          # of 49 favorable (defaulted + judgment_win)
-    collection_failed = 19  # of 49 favorable
-
     case_idx = 0
-    countries = ["DE", "FR", "IT", "AT", "NL", "ES", "BE"]
 
-    def _make_hist_case(idx: int) -> Case:
-        return Case(
-            id=uuid.uuid4(),
-            user_id=admin_user_id,
-            title=f"[HIST] Historischer Fall #{idx + 1:03d}",
-            status=CaseStatus.COMPLETED,
-            claim_amount=round(500 + (idx * 47) % 4500, 2),
-            claim_currency="EUR",
-            claimant_name=f"Kläger {idx + 1}",
-            defendant_name=f"Beklagter {idx + 1}",
-            claimant_country=countries[idx % 7],
-            defendant_country=countries[(idx + 3) % 7],
-            is_cross_border=True,
-            created_at=now - timedelta(days=365 - idx),
-            updated_at=now - timedelta(days=30),
-        )
+    # ── helpers ──────────────────────────────────────────────────────────────
 
     def _ev(case_id: UUID, etype: CaseEventType, days_ago: int) -> CaseEvent:
         return CaseEvent(
@@ -827,95 +802,268 @@ def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[Case
             created_at=now - timedelta(days=max(days_ago, 1)),
         )
 
-    # ── Group 1: service failed (30 cases) ──
-    for _ in range(served_fail):
-        c = _make_hist_case(case_idx)
-        c.status = CaseStatus.REJECTED
+    def _make(  # noqa: PLR0913
+        idx: int,
+        status: CaseStatus,
+        amount: float,
+        claimant_legal: bool,
+        defendant_legal: bool,
+        defendant_country: str,
+        is_cross_border: bool,
+        claim_basis: str,
+        claim_evidence: str,
+        claim_description: str,
+    ) -> Case:
+        claimant_country = "DE"
+        return Case(
+            id=uuid.uuid4(),
+            user_id=admin_user_id,
+            title=f"[HIST] Historischer Fall #{idx + 1:03d}",
+            status=status,
+            claim_amount=round(amount, 2),
+            claim_currency="EUR",
+            claimant_name=f"Kläger {idx + 1}",
+            claimant_country=claimant_country,
+            claimant_domicile_country=claimant_country,
+            claimant_is_legal_person=claimant_legal,
+            defendant_name=f"Beklagter {idx + 1}",
+            defendant_country=defendant_country,
+            defendant_domicile_country=defendant_country,
+            defendant_is_legal_person=defendant_legal,
+            is_cross_border=is_cross_border,
+            claim_basis=claim_basis,
+            claim_evidence=claim_evidence,
+            claim_description=claim_description,
+            created_at=now - timedelta(days=365 - idx),
+            updated_at=now - timedelta(days=30),
+        )
+
+    # ── pre-built text snippets (vary by idx for diversity) ──────────────────
+
+    _contracts = [
+        "Kaufvertrag vom {d}, Auftragsbestätigung",
+        "Schriftlicher Kaufvertrag und Bestellbestätigung vom {d}",
+        "Rahmenliefervertrag, Einzelbestellung vom {d}",
+    ]
+    _deliveries = [
+        "Lieferschein mit Empfangsbestätigung, Transportnachweis",
+        "Liefernachweis, Lieferschein Nr. {n}, Empfangsbestätigung",
+        "Lieferschein und Empfangsquittung",
+    ]
+    _invoices = [
+        "Rechnung Nr. {n}, Fälligkeit {d}, Zahlungsziel 30 Tage",
+        "Rechnung über EUR {a} mit Fälligkeitsdatum {d}",
+        "Rechnung Nr. {n} fällig zum {d}",
+    ]
+    _dunnings = [
+        "Mahnung vom {d} mit 14-Tage-Frist, Zahlungserinnerung",
+        "Erste und zweite Mahnung mit Fristsetzung",
+        "Einschreiben-Mahnung vom {d}",
+    ]
+
+    def _t(templates: list, idx: int, **kw: str) -> str:
+        tpl = templates[idx % len(templates)]
+        kw.setdefault("d", f"01.0{(idx % 9) + 1}.2024")
+        kw.setdefault("n", str(1000 + idx))
+        kw.setdefault("a", str(int(500 + (idx * 47) % 4500)))
+        return tpl.format(**kw)
+
+    # ── Group 1: service_fail (30) → REJECTED, not in NN training ─────────────
+    _g1_countries = ["FR", "IT", "ES", "BE", "NL", "PL", "CZ"]
+    for _ in range(30):
+        c = _make(
+            case_idx,
+            status=CaseStatus.REJECTED,
+            amount=round(400 + (case_idx * 53) % 3600, 2),
+            claimant_legal=bool(case_idx % 2),
+            defendant_legal=bool(case_idx % 3),
+            defendant_country=_g1_countries[case_idx % 7],
+            is_cross_border=True,
+            claim_basis=_t(_contracts, case_idx),
+            claim_evidence=_t(_invoices, case_idx),
+            claim_description="Beklagter unter angegebener Adresse nicht erreichbar. Zustellung fehlgeschlagen.",
+        )
         all_cases.append(c)
         all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
         all_events.append(_ev(c.id, CaseEventType.SERVICE_FAIL, 340 - case_idx))
         case_idx += 1
 
-    # ── Group 2: served -> defaulted -> collected ──
-    defaults_collected = min(collected, defaulted)  # 30 (limited by defaulted=35)
-    for _ in range(defaults_collected):
-        c = _make_hist_case(case_idx)
+    # ── Group 2: default → collected (30) → outcome 1.0 ───────────────────────
+    # Strong evidence, domestic or nearby EU, legal persons, small-medium amounts
+    _g2_countries = ["DE", "DE", "AT", "NL", "DE", "AT", "BE", "NL", "DE", "DE"]
+    for i in range(30):
+        ev_parts = [
+            _t(_contracts, case_idx),
+            _t(_deliveries, case_idx),
+            _t(_invoices, case_idx),
+        ]
+        if i % 3 != 2:   # 20 of 30 also have dunning
+            ev_parts.append(_t(_dunnings, case_idx))
+        c = _make(
+            case_idx,
+            status=CaseStatus.COMPLETED,
+            amount=round(600 + (case_idx * 43) % 2400, 2),
+            claimant_legal=True,
+            defendant_legal=bool(i % 3 != 1),
+            defendant_country=_g2_countries[i % 10],
+            is_cross_border=_g2_countries[i % 10] != "DE",
+            claim_basis=_t(_contracts, case_idx),
+            claim_evidence=", ".join(ev_parts),
+            claim_description=(
+                f"Lieferung von Waren gemäß Kaufvertrag. "
+                f"Rechnung über EUR {int(600 + (case_idx*43)%2400)} war fällig. "
+                f"Trotz Mahnung keine Zahlung. Beklagter hat nicht reagiert."
+            ),
+        )
         all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_OK, 340 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.DEFAULT, 310 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.JUDGMENT_WIN, 300 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.PAYMENT_RECEIVED, 270 - case_idx))
+        all_events += [
+            _ev(c.id, CaseEventType.FILED,            350 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,       340 - case_idx),
+            _ev(c.id, CaseEventType.DEFAULT,          310 - case_idx),
+            _ev(c.id, CaseEventType.JUDGMENT_WIN,     300 - case_idx),
+            _ev(c.id, CaseEventType.PAYMENT_RECEIVED, 270 - case_idx),
+        ]
         case_idx += 1
 
-    # ── Group 3: served -> defaulted -> collection failed ──
-    defaults_failed = defaulted - defaults_collected  # 5
-    for _ in range(defaults_failed):
-        c = _make_hist_case(case_idx)
+    # ── Group 3: default → collection_failed (5) → outcome 0.0 ───────────────
+    # Strong evidence but defendant insolvent; Eastern-EU cross-border
+    _g3_countries = ["PL", "CZ", "SK", "HU", "RO"]
+    for i in range(5):
+        c = _make(
+            case_idx,
+            status=CaseStatus.COMPLETED,
+            amount=round(2500 + i * 400, 2),
+            claimant_legal=True,
+            defendant_legal=True,
+            defendant_country=_g3_countries[i],
+            is_cross_border=True,
+            claim_basis=_t(_contracts, case_idx),
+            claim_evidence=", ".join([
+                _t(_contracts, case_idx),
+                _t(_deliveries, case_idx),
+                _t(_invoices, case_idx),
+                _t(_dunnings, case_idx),
+            ]),
+            claim_description=(
+                "Vollständige Dokumentation vorhanden. "
+                "Beklagter hat Insolvenzverfahren angemeldet. "
+                "Insolvenzbekanntmachung im Handelsregister eingetragen. "
+                "Vollstreckung im Ausland wegen Insolvenz gescheitert."
+            ),
+        )
         all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_OK, 340 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.DEFAULT, 310 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.JUDGMENT_WIN, 300 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.COLLECTION_FAILED, 270 - case_idx))
+        all_events += [
+            _ev(c.id, CaseEventType.FILED,             350 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,        340 - case_idx),
+            _ev(c.id, CaseEventType.DEFAULT,           310 - case_idx),
+            _ev(c.id, CaseEventType.JUDGMENT_WIN,      300 - case_idx),
+            _ev(c.id, CaseEventType.COLLECTION_FAILED, 270 - case_idx),
+        ]
         case_idx += 1
 
-    # ── Group 4: served -> responded -> settled -> payment ──
-    for _ in range(settled):
-        c = _make_hist_case(case_idx)
+    # ── Group 4: settled + payment (11) → outcome 0.7 (SETTLED) / 1.0 ─────────
+    # Quality disputes, cross-border IT/FR/ES; medium evidence
+    _g4_countries = ["IT", "FR", "ES", "IT", "FR", "IT", "ES", "FR", "IT", "FR", "ES"]
+    for i in range(11):
+        has_dunning = i % 3 != 0
+        ev_parts = [_t(_contracts, case_idx), _t(_invoices, case_idx)]
+        if i % 2 == 0:
+            ev_parts.append(_t(_deliveries, case_idx))
+        if has_dunning:
+            ev_parts.append(_t(_dunnings, case_idx))
+        c = _make(
+            case_idx,
+            status=CaseStatus.COMPLETED,
+            amount=round(1200 + (case_idx * 61) % 2800, 2),
+            claimant_legal=True,
+            defendant_legal=bool(i % 2),
+            defendant_country=_g4_countries[i],
+            is_cross_border=True,
+            claim_basis=_t(_contracts, case_idx),
+            claim_evidence=", ".join(ev_parts),
+            claim_description=(
+                "Beklagter beanstandet die Qualität der gelieferten Waren. "
+                "Klägerin bestreitet Qualitätsmängel. "
+                "Vergleich erzielt: Zahlung eines Teilbetrages vereinbart."
+            ),
+        )
         all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_OK, 340 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.DEFENDANT_RESPONDED, 320 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SETTLED, 300 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.PAYMENT_RECEIVED, 280 - case_idx))
+        all_events += [
+            _ev(c.id, CaseEventType.FILED,                350 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,           340 - case_idx),
+            _ev(c.id, CaseEventType.DEFENDANT_RESPONDED,  320 - case_idx),
+            _ev(c.id, CaseEventType.SETTLED,              300 - case_idx),
+            _ev(c.id, CaseEventType.PAYMENT_RECEIVED,     280 - case_idx),
+        ]
         case_idx += 1
 
-    # ── Group 5: served -> responded -> judgment win -> collected ──
-    win_collected = max(0, collected - defaults_collected)
-    for i in range(min(win_collected, judgment_win)):
-        c = _make_hist_case(case_idx)
+    # ── Group 6: win → collection_failed (14) → outcome 0.0 ──────────────────
+    # Mix: insolvency (8) + unreachable after judgment (6)
+    _g6_countries = ["CZ", "PL", "HU", "RO", "SK", "BG", "FR", "IT", "ES", "PT", "GR", "HR", "CY", "LV"]
+    for i in range(14):
+        has_insolvency = i < 8
+        desc = (
+            "Beklagter insolvent. Insolvenzverfahren eröffnet, Forderung zur Insolvenztabelle angemeldet. "
+            "Vollstreckung mangels vollstreckbarem Vermögen eingestellt."
+            if has_insolvency else
+            "Urteil erwirkt. Vollstreckung im Ausland nicht erfolgreich. "
+            "Beklagter hat kein pfändbares Vermögen im Inland. Vollstreckung eingestellt."
+        )
+        ev_parts = [_t(_contracts, case_idx), _t(_invoices, case_idx)]
+        if i % 2 == 0:
+            ev_parts.append(_t(_deliveries, case_idx))
+        ev_parts.append(_t(_dunnings, case_idx))
+        c = _make(
+            case_idx,
+            status=CaseStatus.COMPLETED,
+            amount=round(1800 + (case_idx * 37) % 3200, 2),
+            claimant_legal=True,
+            defendant_legal=bool(i % 3 != 1),
+            defendant_country=_g6_countries[i],
+            is_cross_border=True,
+            claim_basis=_t(_contracts, case_idx),
+            claim_evidence=", ".join(ev_parts),
+            claim_description=desc,
+        )
         all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_OK, 340 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.DEFENDANT_RESPONDED, 320 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.JUDGMENT_WIN, 290 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.PAYMENT_RECEIVED, 260 - case_idx))
+        all_events += [
+            _ev(c.id, CaseEventType.FILED,                350 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,           340 - case_idx),
+            _ev(c.id, CaseEventType.DEFENDANT_RESPONDED,  320 - case_idx),
+            _ev(c.id, CaseEventType.JUDGMENT_WIN,         290 - case_idx),
+            _ev(c.id, CaseEventType.COLLECTION_FAILED,    260 - case_idx),
+        ]
         case_idx += 1
 
-    # ── Group 6: served -> responded -> judgment win -> collection failed ──
-    win_not_collected = judgment_win - min(win_collected, judgment_win)
-    remaining_coll_fail = max(0, collection_failed - defaults_failed)
-    win_failed = min(win_not_collected, remaining_coll_fail)
-    for _ in range(win_failed):
-        c = _make_hist_case(case_idx)
+    # ── Group 7: judgment_loss (10) → outcome 0.0 ──────────────────────────────
+    # Weak/oral-only evidence; defendant contests successfully
+    _g7_amounts = [350, 500, 750, 800, 400, 650, 550, 900, 480, 720]
+    _g7_countries = ["DE", "AT", "DE", "NL", "DE", "AT", "BE", "DE", "AT", "DE"]
+    for i in range(10):
+        c = _make(
+            case_idx,
+            status=CaseStatus.COMPLETED,
+            amount=_g7_amounts[i],
+            claimant_legal=bool(i % 3 == 0),
+            defendant_legal=False,
+            defendant_country=_g7_countries[i],
+            is_cross_border=_g7_countries[i] != "DE",
+            claim_basis="Mündliche Vereinbarung, keine schriftlichen Unterlagen",
+            claim_evidence="Keine schriftlichen Nachweise vorhanden. Zeugenaussagen.",
+            claim_description=(
+                "Mündlich vereinbarte Leistung. Kein schriftlicher Vertrag abgeschlossen. "
+                "Keine Dokumentation der erbrachten Leistung. "
+                "Beklagter bestreitet das Zustandekommen eines Vertrages. "
+                "Qualitätsmangel geltend gemacht."
+            ),
+        )
         all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_OK, 340 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.DEFENDANT_RESPONDED, 320 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.JUDGMENT_WIN, 290 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.COLLECTION_FAILED, 260 - case_idx))
-        case_idx += 1
-
-    # ── Group 7: served -> responded -> judgment loss ──
-    for _ in range(judgment_loss):
-        c = _make_hist_case(case_idx)
-        all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_OK, 340 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.DEFENDANT_RESPONDED, 320 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.JUDGMENT_LOSS, 290 - case_idx))
-        case_idx += 1
-
-    # ── Fill remaining to reach exactly 100 (extra successful default cases) ──
-    while case_idx < total:
-        c = _make_hist_case(case_idx)
-        all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_OK, 340 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.DEFAULT, 310 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.JUDGMENT_WIN, 300 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.PAYMENT_RECEIVED, 270 - case_idx))
+        all_events += [
+            _ev(c.id, CaseEventType.FILED,                350 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,           340 - case_idx),
+            _ev(c.id, CaseEventType.DEFENDANT_RESPONDED,  320 - case_idx),
+            _ev(c.id, CaseEventType.JUDGMENT_LOSS,        290 - case_idx),
+        ]
         case_idx += 1
 
     return all_cases, all_events
@@ -925,14 +1073,32 @@ def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[Case
 async def seed_demo_data(
     admin: User = Depends(_require_admin),
     db: AsyncSession = Depends(get_db),
+    force: bool = Query(False, description="Delete existing [HIST] cases and re-seed with fresh rich data"),
 ):
     """Seed 5 fictional completed cases + 100 historical observation cases.
 
-    Idempotent: skips cases whose title already exists and skips historical
-    seeding if ``[HIST]`` cases are already present.
+    Idempotent by default: skips cases whose title already exists and skips
+    historical seeding if ``[HIST]`` cases are already present.
+    Pass ``?force=true`` to delete existing ``[HIST]`` cases and re-seed them
+    with the current feature-rich training data.
     """
     try:
-        # Check if historical data already seeded
+        # ── optionally delete existing [HIST] cases ──
+        if force:
+            # Fetch IDs of existing [HIST] cases first (to cascade-delete events)
+            hist_ids_res = await db.execute(
+                select(Case.id).where(Case.title.like("[HIST]%"))
+            )
+            hist_ids = [row[0] for row in hist_ids_res.fetchall()]
+            if hist_ids:
+                await db.execute(
+                    delete(CaseEvent).where(CaseEvent.case_id.in_(hist_ids))
+                )
+                await db.execute(
+                    delete(Case).where(Case.id.in_(hist_ids))
+                )
+
+        # Check if historical data already seeded (after potential forced delete)
         hist_check = await db.execute(
             select(func.count(Case.id)).where(Case.title.like("[HIST]%"))
         )
@@ -998,7 +1164,7 @@ async def seed_demo_data(
 
         msg = f"{fictional_count} fiktive Fälle erstellt."
         if historical_event_count == -1:
-            msg += " Historische Daten waren bereits vorhanden."
+            msg += " Historische Daten waren bereits vorhanden (kein force)."
         else:
             msg += f" {historical_event_count} historische Events aus 100 Fällen erstellt."
 

@@ -94,10 +94,13 @@
       <!-- Seed Button (Admin) -->
       <section class="card fade-in mt-2 mb-3" v-if="auth.user?.is_admin">
         <h2>Admin: Seed-Daten</h2>
-        <p class="text-secondary mb-1">Generiert 5 fiktive abgeschlossene Fälle und 100 historische Beobachtungen für die Bayes-Statistik.</p>
+        <p class="text-secondary mb-1">Generiert 5 fiktive abgeschlossene Fälle und 100 historische Beobachtungen für Bayes-Statistik und NN-Training.</p>
         <div class="flex gap-1">
-          <button class="btn btn-primary" @click="seedData" :disabled="seeding">
+          <button class="btn btn-primary" @click="seedData(false)" :disabled="seeding">
             {{ seeding ? 'Wird generiert...' : 'Seed-Daten generieren' }}
+          </button>
+          <button class="btn btn-outline" @click="seedData(true)" :disabled="seeding" title="Löscht bestehende [HIST]-Fälle und erstellt sie neu mit aktuellen Features">
+            Historische Daten neu generieren
           </button>
           <button class="btn btn-accent" @click="updatePriors" :disabled="updatingPriors">
             {{ updatingPriors ? 'Wird aktualisiert...' : 'Priors aktualisieren' }}
@@ -136,11 +139,12 @@ async function loadStats() {
   }
 }
 
-async function seedData() {
+async function seedData(force = false) {
   seeding.value = true
   seedMsg.value = ''
   try {
-    const { data } = await api.post('/statistics/seed')
+    const url = force ? '/statistics/seed?force=true' : '/statistics/seed'
+    const { data } = await api.post(url)
     seedMsg.value = data.message || 'Seed-Daten generiert!'
     await loadStats()
   } catch (e) {
