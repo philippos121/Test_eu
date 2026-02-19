@@ -3,7 +3,8 @@ seed data, prior updates, and expected-value calculations.
 
 Endpoints:
   GET  /api/statistics/overview       — aggregate stats + posteriors + completed case detail
-  POST /api/statistics/seed           — seed 5 fictional + 100 historical cases (admin)
+  POST /api/statistics/seed           — seed 30 fictional cases (admin)
+  POST /api/statistics/test-case      — add a custom test case and recalculate (admin)
   POST /api/statistics/update-priors  — recalculate PriorsConfig from event outcomes (admin)
   GET  /api/cases/{case_id}/expected-value — per-case expected-value breakdown (admin)
 """
@@ -12,11 +13,11 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,7 +49,7 @@ router = APIRouter(prefix="/api/statistics", tags=["statistics"])
 
 
 # ---------------------------------------------------------------------------
-# Pydantic response schemas (local to this module)
+# Pydantic response schemas
 # ---------------------------------------------------------------------------
 
 class PosteriorItem(BaseModel):
@@ -88,9 +89,22 @@ class CompletedCaseDetail(BaseModel):
     claim_amount: Optional[float] = None
     claim_currency: Optional[str] = None
     outcome_success: bool
+    outcome: str = ""           # won/lost/settled/withdrawn
     p_cash_success: Optional[float] = None
     net_ev: Optional[float] = None
     pipeline: Optional[PipelineScores] = None
+    # Detailed fields for the 100 fictional cases
+    description: str = ""
+    evidence_desc: str = ""
+    assessment: str = ""
+    claimant_name: str = ""
+    claimant_country: str = ""
+    defendant_name: str = ""
+    defendant_country: str = ""
+    court_country: str = ""
+    is_cross_border: bool = False
+    is_seed: bool = False       # True for seed/test cases, False for real cases
+    is_test: bool = False       # True for user-created test cases
 
 
 class LearningInsight(BaseModel):
@@ -144,6 +158,30 @@ class SeedResponse(BaseModel):
     message: str
 
 
+class TestCaseRequest(BaseModel):
+    """Request body for creating a custom test case."""
+    title: str = "Benutzerdefinierter Testfall"
+    claim_type: str = "invoice"
+    claimant_name: str = "Testkläger"
+    claimant_country: str = "DE"
+    defendant_name: str = "Testbeklagter"
+    defendant_country: str = "DE"
+    court_country: str = "DE"
+    claim_amount: float = 1000.0
+    description: str = ""
+    evidence_desc: str = ""
+    p_recht: float = 0.5
+    p_beweis: float = 0.5
+    p_eintreibung: Optional[float] = 0.7
+    outcome: str = "won"  # won/lost/settled/withdrawn
+
+
+class TestCaseResponse(BaseModel):
+    case_id: UUID
+    message: str
+    pipeline: PipelineScores
+
+
 class UpdatedPriorItem(BaseModel):
     rate_name: str
     old_alpha: float
@@ -180,6 +218,22 @@ def _is_successful(events: list[CaseEvent]) -> bool:
     return any(e.event_type == CaseEventType.PAYMENT_RECEIVED for e in events)
 
 
+def _outcome_from_events(events: list[CaseEvent]) -> str:
+    """Determine outcome string from events."""
+    types = {e.event_type for e in events}
+    if CaseEventType.PAYMENT_RECEIVED in types:
+        if CaseEventType.SETTLED in types:
+            return "settled"
+        return "won"
+    if CaseEventType.JUDGMENT_LOSS in types:
+        return "lost"
+    if CaseEventType.COLLECTION_FAILED in types:
+        return "lost"
+    if CaseEventType.SERVICE_FAIL in types:
+        return "withdrawn"
+    return "lost"
+
+
 RATE_LABELS: dict[str, str] = {
     "served": "Zustellungsrate",
     "default": "Versäumnisrate",
@@ -187,14 +241,12 @@ RATE_LABELS: dict[str, str] = {
     "collect": "Inkassorate",
 }
 
-# Display-oriented 3-rate labels for the statistics overview
 DISPLAY_RATE_LABELS: dict[str, str] = {
     "merit": "Schlüssigkeitsprüfung",
     "default_settle": "Versäumnis-/Vergleichsrate",
     "collect": "Inkassorate",
 }
 
-# Event mapping for the 3 display rates
 DISPLAY_RATE_EVENT_MAP: dict[str, dict] = {
     "merit": {
         "success": {CaseEventType.SERVICE_OK},
@@ -210,36 +262,24 @@ DISPLAY_RATE_EVENT_MAP: dict[str, dict] = {
     },
 }
 
-# Default priors for the 3 display rates
 DISPLAY_DEFAULT_PRIORS: dict[str, tuple[float, float]] = {
-    "merit": (7.0, 3.0),           # ~70% base merit/service rate
-    "default_settle": (5.0, 5.0),  # ~50% default-or-settle rate
-    "collect": (6.0, 4.0),         # ~60% collection rate
+    "merit": (7.0, 3.0),
+    "default_settle": (5.0, 5.0),
+    "collect": (6.0, 4.0),
 }
 
 
 def _estimate_court_fees(claim_amount: float) -> float:
-    """Simplified ESCP court fee estimation.
-
-    Uses a percentage-based formula with a minimum floor:
-      fee = max(35, claim_amount * 0.035)
-    This is a reasonable approximation across EU member states for ESCP claims.
-    """
+    """Simplified ESCP court fee estimation."""
     return max(35.0, claim_amount * 0.035)
 
 
-SERVICE_COSTS_FLAT = 75.0   # flat service cost estimate (EUR)
-COMMISSION_RATE = 0.30      # 30% commission on collected amount
+SERVICE_COSTS_FLAT = 75.0
+COMMISSION_RATE = 0.30
 
 
 def _estimate_attorney_costs(claim_amount: float) -> float:
-    """Estimate portal's attorney/legal operational costs.
-
-    Simplified schedule based on claim amount:
-      - Up to 500 EUR:  50 EUR flat
-      - 500-2000 EUR:   50 + 5% of amount above 500
-      - 2000-5000 EUR:  125 + 3% of amount above 2000
-    """
+    """Estimate portal's attorney/legal operational costs."""
     if claim_amount <= 500:
         return 50.0
     elif claim_amount <= 2000:
@@ -249,32 +289,19 @@ def _estimate_attorney_costs(claim_amount: float) -> float:
 
 
 def _estimate_opponent_costs(claim_amount: float) -> float:
-    """Estimate opponent's costs that portal must pay on loss.
-
-    In ESCP proceedings, the losing party typically pays the winner's
-    reasonable costs.  Estimated as attorney costs + a small overhead.
-    """
+    """Estimate opponent's costs that portal must pay on loss."""
     return _estimate_attorney_costs(claim_amount) * 1.2
 
 
 def _compute_net_ev(claim_amount: float, outcome_success: bool) -> float:
-    """Compute net expected value for a *completed* case from the
-    **project owner's** (portal's) perspective.
-
-    On success:
-      net = 30% commission + cost compensation (court fees + attorney costs) - own costs
-    On failure:
-      net = -(own costs + opponent costs)
-
-    Own costs = court_fees + attorney_costs + service_costs
-    """
+    """Compute net expected value for a *completed* case."""
     court_fees = _estimate_court_fees(claim_amount)
     attorney_costs = _estimate_attorney_costs(claim_amount)
     service_costs = SERVICE_COSTS_FLAT
 
     if outcome_success:
         commission = claim_amount * COMMISSION_RATE
-        cost_compensation = court_fees + attorney_costs  # recovered from opponent
+        cost_compensation = court_fees + attorney_costs
         own_costs = court_fees + attorney_costs + service_costs
         return round(commission + cost_compensation - own_costs, 2)
     else:
@@ -318,6 +345,146 @@ def _build_insight_text(rate_name: str, prior_mean: float, posterior_mean: float
     return ""
 
 
+def _compute_pipeline_v3(scenario: dict, claim_amount: float) -> dict:
+    """Compute pipeline v3 scores from a scenario's p_recht, p_beweis, p_eintreibung."""
+    p_recht = scenario["p_recht"]
+    p_beweis = scenario["p_beweis"]
+    p_eintreibung = scenario.get("p_eintreibung")
+
+    p_obsiegen = round(p_recht * p_beweis, 4)
+    p_gesamt = round(p_obsiegen * p_eintreibung, 4) if p_eintreibung is not None else None
+
+    # EV calculation
+    fee_rate = 0.30
+    costs = 35.0 + 75.0 + 50.0  # filing + service + enforcement
+    loss_costs = 200.0
+    if p_obsiegen > 0:
+        ev = round(
+            p_obsiegen * fee_rate * claim_amount
+            - costs
+            - (1 - p_obsiegen) * loss_costs,
+            2,
+        )
+    else:
+        ev = round(-costs - loss_costs, 2)
+
+    take_case = p_obsiegen >= 0.80 and ev > 0
+
+    # Element scores derived from p_beweis
+    base = p_beweis
+    element_scores = {
+        "contract_basis": round(min(base + 0.10, 1.0), 4),
+        "performance": round(min(base + 0.05, 1.0), 4),
+        "amount_due": round(min(base + 0.02, 1.0), 4),
+        "non_payment": round(base, 4),
+    }
+
+    return {
+        "p_recht": p_recht,
+        "p_entstanden": round(min(p_recht * 1.05, 1.0 if p_recht > 0 else 0.0), 4),
+        "p_nicht_untergegangen": 0.95 if p_recht > 0 else 0.0,
+        "p_durchsetzbar": 0.97 if p_recht > 0 else 0.0,
+        "p_beweis": p_beweis,
+        "p_obsiegen": p_obsiegen,
+        "p_eintreibung": p_eintreibung,
+        "p_gesamt": p_gesamt,
+        "ev_betreiber": ev,
+        "take_case": take_case,
+        "claim_type": scenario.get("claim_type", "invoice"),
+        "court_country": scenario.get("court_country", "DE"),
+        "element_scores": element_scores,
+    }
+
+
+EVENT_TYPE_MAP = {
+    "FILED": CaseEventType.FILED,
+    "SERVICE_OK": CaseEventType.SERVICE_OK,
+    "SERVICE_FAIL": CaseEventType.SERVICE_FAIL,
+    "DEFENDANT_RESPONDED": CaseEventType.DEFENDANT_RESPONDED,
+    "DEFAULT": CaseEventType.DEFAULT,
+    "SETTLED": CaseEventType.SETTLED,
+    "JUDGMENT_WIN": CaseEventType.JUDGMENT_WIN,
+    "JUDGMENT_LOSS": CaseEventType.JUDGMENT_LOSS,
+    "PAYMENT_RECEIVED": CaseEventType.PAYMENT_RECEIVED,
+    "COLLECTION_FAILED": CaseEventType.COLLECTION_FAILED,
+}
+
+
+def _build_seed_from_scenarios(admin_user_id: UUID) -> tuple[list[Case], list[CaseEvent], list[dict]]:
+    """Build fictional cases from SEED_SCENARIOS.
+
+    Returns (cases, events, pipeline_data) where pipeline_data is a list of
+    {"case_id": UUID, "pipeline_v3": dict, "outcome": bool} dicts.
+    """
+    from .seed_scenarios import SEED_SCENARIOS
+
+    now = datetime.utcnow()
+    all_cases: list[Case] = []
+    all_events: list[CaseEvent] = []
+    all_pipeline: list[dict] = []
+
+    for idx, sc in enumerate(SEED_SCENARIOS):
+        case_id = uuid.uuid4()
+        amount = sc["amount"]
+        outcome = sc.get("outcome", "lost")
+        is_success = outcome in ("won", "settled")
+        is_cb = sc.get("is_cross_border",
+                        sc.get("cl_country", "DE") != sc.get("def_country", "DE"))
+
+        case_status = CaseStatus.COMPLETED
+        if outcome == "withdrawn":
+            case_status = CaseStatus.REJECTED
+
+        c = Case(
+            id=case_id,
+            user_id=admin_user_id,
+            title=sc["title"],
+            status=case_status,
+            court_country=sc.get("court_country", "DE"),
+            claimant_is_legal_person=True,
+            claimant_name=sc.get("cl_name", f"Kläger {idx+1}"),
+            claimant_country=sc.get("cl_country", "DE"),
+            defendant_is_legal_person=True,
+            defendant_name=sc.get("def_name", f"Beklagter {idx+1}"),
+            defendant_country=sc.get("def_country", "DE"),
+            is_cross_border=is_cb,
+            claim_amount=amount,
+            claim_currency="EUR",
+            claim_description=sc.get("description", ""),
+            claim_evidence=sc.get("evidence_desc", ""),
+            assessment_summary=sc.get("assessment", ""),
+            success_probability=round(sc["p_recht"] * sc["p_beweis"], 2),
+            applicability_result="applicable",
+            created_at=now - timedelta(days=365 - idx * 3),
+            updated_at=now - timedelta(days=30),
+        )
+        all_cases.append(c)
+
+        # Create events
+        event_names = sc.get("events", ["FILED"])
+        for ev_idx, ev_name in enumerate(event_names):
+            etype = EVENT_TYPE_MAP.get(ev_name)
+            if etype:
+                all_events.append(CaseEvent(
+                    id=uuid.uuid4(),
+                    case_id=case_id,
+                    event_type=etype,
+                    payload={"source": "seed_scenario", "index": idx},
+                    created_at=now - timedelta(days=350 - idx * 3 - ev_idx * 10),
+                ))
+
+        # Pipeline v3 data
+        pv3 = _compute_pipeline_v3(sc, amount)
+        all_pipeline.append({
+            "case_id": case_id,
+            "pipeline_v3": pv3,
+            "outcome": is_success,
+            "scenario_idx": idx,
+        })
+
+    return all_cases, all_events, all_pipeline
+
+
 # ---------------------------------------------------------------------------
 # 1) GET /api/statistics/overview
 # ---------------------------------------------------------------------------
@@ -332,7 +499,8 @@ async def statistics_overview(
     Includes:
     - Totals and success rate
     - Bayesian posteriors aggregated from ALL completed-case events
-    - Last 20 completed cases with outcome details
+    - ALL completed/rejected cases with outcome details and pipeline scores
+    - Pipeline v3 aggregates and Bayes learning progression
     """
     # Total cases (all statuses)
     total_result = await db.execute(select(func.count(Case.id)))
@@ -347,7 +515,7 @@ async def statistics_overview(
     completed_cases_list: list[Case] = list(completed_result.scalars().all())
     completed_count = len(completed_cases_list)
 
-    # ── Load events for each completed case and determine success ──
+    # Load events for each completed case and determine success
     case_events_map: dict[UUID, list[CaseEvent]] = {}
     case_success_map: dict[UUID, bool] = {}
 
@@ -365,7 +533,7 @@ async def statistics_overview(
             evts = case_events_map.get(c.id, [])
             case_success_map[c.id] = _is_successful(evts)
 
-    # ── Success rate ──
+    # Success rate
     successful_count = sum(1 for v in case_success_map.values() if v)
     success_rate = (
         round(successful_count / completed_count, 4)
@@ -373,7 +541,7 @@ async def statistics_overview(
         else 0.0
     )
 
-    # ── Average recovery (mean claim_amount of successful completed cases) ──
+    # Average recovery
     successful_amounts: list[float] = []
     for c in completed_cases_list:
         if case_success_map.get(c.id) and c.claim_amount and c.claim_amount > 0:
@@ -385,19 +553,16 @@ async def statistics_overview(
         else None
     )
 
-    # ── Bayesian posteriors aggregated from ALL completed-case events ──
+    # Bayesian posteriors
     flat_events: list[CaseEvent] = []
     for evts in case_events_map.values():
         flat_events.extend(evts)
 
-    # Use 3 display rates: merit, default_settle, collect
     posteriors: list[PosteriorItem] = []
     learning_insights: list[LearningInsight] = []
 
     for rate_name in ["merit", "default_settle", "collect"]:
         prior_alpha, prior_beta = DISPLAY_DEFAULT_PRIORS.get(rate_name, (2.0, 2.0))
-
-        # Count events using display rate event map
         mapping = DISPLAY_RATE_EVENT_MAP.get(rate_name, {})
         success_types = mapping.get("success", set())
         failure_types = mapping.get("failure", set())
@@ -421,7 +586,6 @@ async def statistics_overview(
             ci_high=post.ci_high,
         ))
 
-        # Build learning insight
         prior_mean = round(prior_alpha / (prior_alpha + prior_beta), 4) if (prior_alpha + prior_beta) > 0 else 0.5
         interpretation = _build_insight_text(rate_name, prior_mean, round(post.mean, 4), successes, failures)
         learning_insights.append(LearningInsight(
@@ -434,49 +598,43 @@ async def statistics_overview(
             interpretation=interpretation,
         ))
 
-    # ── Completed cases with detail ──
-    # Non-HIST fictional cases first (always show all), then most recent HIST cases
-    fictional_cases = [c for c in completed_cases_list if not (c.title or "").startswith("[HIST]")]
-    hist_cases = [c for c in completed_cases_list if (c.title or "").startswith("[HIST]")]
-    fictional_sorted = sorted(fictional_cases, key=lambda c: c.created_at or datetime.min, reverse=True)
-    hist_sorted = sorted(hist_cases, key=lambda c: c.created_at or datetime.min, reverse=True)[:15]
-    sorted_completed = fictional_sorted + hist_sorted
-
-    # Pre-fetch latest CaseProcessScore for these cases
-    detail_ids = [c.id for c in sorted_completed]
+    # Pre-fetch CaseProcessScore for ALL completed cases
+    all_completed_ids = [c.id for c in completed_cases_list]
     score_map: dict[UUID, Optional[CaseProcessScore]] = {}
-    if detail_ids:
-        for cid in detail_ids:
+    all_pipeline_data: list[dict] = []
+
+    if all_completed_ids:
+        for cid in all_completed_ids:
             score_result = await db.execute(
                 select(CaseProcessScore)
                 .where(CaseProcessScore.case_id == cid)
                 .order_by(CaseProcessScore.created_at.desc())
                 .limit(1)
             )
-            score_map[cid] = score_result.scalar_one_or_none()
+            sc = score_result.scalar_one_or_none()
+            score_map[cid] = sc
+            if sc and sc.posteriors_json and isinstance(sc.posteriors_json, dict):
+                pv3 = sc.posteriors_json.get("pipeline_v3")
+                if pv3:
+                    pv3_copy = dict(pv3)
+                    pv3_copy["_outcome"] = case_success_map.get(cid, False)
+                    all_pipeline_data.append(pv3_copy)
 
-    # Also fetch pipeline v3 data for ALL completed cases (for aggregates)
-    all_completed_ids = [c.id for c in completed_cases_list]
-    all_pipeline_data: list[dict] = []
-    if all_completed_ids:
-        for cid in all_completed_ids:
-            sr = await db.execute(
-                select(CaseProcessScore.posteriors_json)
-                .where(CaseProcessScore.case_id == cid)
-                .order_by(CaseProcessScore.created_at.desc())
-                .limit(1)
-            )
-            pj = sr.scalar_one_or_none()
-            if pj and isinstance(pj, dict) and "pipeline_v3" in pj:
-                pv3 = pj["pipeline_v3"]
-                pv3["_outcome"] = case_success_map.get(cid, False)
-                all_pipeline_data.append(pv3)
+    # Build completed cases detail — ALL cases, sorted by creation date
+    sorted_completed = sorted(completed_cases_list,
+                              key=lambda c: c.created_at or datetime.min,
+                              reverse=True)
+
+    # Detect seed/test cases
+    seed_marker = "[TEST]"
 
     completed_cases_detail: list[CompletedCaseDetail] = []
     for c in sorted_completed:
         outcome_success = case_success_map.get(c.id, False)
         claim_amt = c.claim_amount or 0.0
         net_ev = _compute_net_ev(claim_amt, outcome_success) if claim_amt > 0 else None
+        evts = case_events_map.get(c.id, [])
+        outcome_str = _outcome_from_events(evts)
 
         # Extract pipeline v3 scores
         pipeline_scores = None
@@ -500,18 +658,33 @@ async def statistics_overview(
                     element_scores=pv3.get("element_scores", {}),
                 )
 
+        is_seed = sc.model_version == "v3-seed" if sc and sc.model_version else False
+        is_test = (c.title or "").startswith(seed_marker)
+
         completed_cases_detail.append(CompletedCaseDetail(
             id=c.id,
-            title=c.title,
+            title=c.title or "",
             claim_amount=c.claim_amount,
             claim_currency=c.claim_currency,
             outcome_success=outcome_success,
+            outcome=outcome_str,
             p_cash_success=sc.p_cash_success if sc else None,
             net_ev=net_ev,
             pipeline=pipeline_scores,
+            description=c.claim_description or "",
+            evidence_desc=c.claim_evidence or "",
+            assessment=c.assessment_summary or "",
+            claimant_name=c.claimant_name or "",
+            claimant_country=c.claimant_country or "",
+            defendant_name=c.defendant_name or "",
+            defendant_country=c.defendant_country or "",
+            court_country=c.court_country or "",
+            is_cross_border=c.is_cross_border or False,
+            is_seed=is_seed,
+            is_test=is_test,
         ))
 
-    # ── Pipeline v3 aggregates ──
+    # Pipeline v3 aggregates
     pipeline_aggregates = None
     if all_pipeline_data:
         n = len(all_pipeline_data)
@@ -534,15 +707,14 @@ async def statistics_overview(
             total_evaluated=n,
         )
 
-    # ── Bayes learning progression ──
-    # Simulate Bayesian updates across the 100 cases for the contract_basis element
+    # Bayes learning progression — simulate updates across cases
     bayes_steps: list[BayesLearningStep] = []
-    alpha_cb, beta_cb = 2.0, 2.0  # contract_basis prior
-    alpha_pf, beta_pf = 2.0, 2.0  # performance prior
+    alpha_cb, beta_cb = 2.0, 2.0
+    alpha_pf, beta_pf = 2.0, 2.0
     step_num = 0
     for pv3 in all_pipeline_data:
         outcome = pv3.get("_outcome", False)
-        conf_weight = 0.175  # 0.7 * 0.25
+        conf_weight = 0.175
         if outcome:
             alpha_cb += conf_weight
             alpha_pf += conf_weight
@@ -550,7 +722,6 @@ async def statistics_overview(
             beta_cb += conf_weight
             beta_pf += conf_weight
         step_num += 1
-        # Record every 5th step + first and last
         if step_num <= 2 or step_num % 5 == 0 or step_num == len(all_pipeline_data):
             bayes_steps.append(BayesLearningStep(
                 step=step_num,
@@ -558,7 +729,7 @@ async def statistics_overview(
                 alpha=round(alpha_cb, 3),
                 beta=round(beta_cb, 3),
                 mean=round(alpha_cb / (alpha_cb + beta_cb), 4),
-                context_key="invoice:DE:b2b",
+                context_key="all",
                 case_outcome="success" if outcome else "failure",
             ))
             bayes_steps.append(BayesLearningStep(
@@ -567,7 +738,7 @@ async def statistics_overview(
                 alpha=round(alpha_pf, 3),
                 beta=round(beta_pf, 3),
                 mean=round(alpha_pf / (alpha_pf + beta_pf), 4),
-                context_key="invoice:DE:b2b",
+                context_key="all",
                 case_outcome="success" if outcome else "failure",
             ))
 
@@ -588,890 +759,92 @@ async def statistics_overview(
 # 2) POST /api/statistics/seed  (admin only)
 # ---------------------------------------------------------------------------
 
-def _build_seed_cases(admin_user_id: UUID) -> list[dict]:
-    """Build 5 detailed fictional completed cases for demo purposes.
-
-    1. Strong case:  Invoice for goods, EUR 2500, defendant DE, successful
-    2. Weak case:    Oral agreement for services, EUR 800, no evidence, unsuccessful
-    3. Disputed case: Contract dispute, EUR 3000, defendant disputes quality, settled
-    4. Insolvency case: Strong evidence, EUR 4500, defendant insolvent, unsuccessful
-    5. Cross-border case: IT supplier, EUR 1200, defendant FR, successful via default
-    """
-    now = datetime.utcnow()
-    cases: list[dict] = []
-
-    # ── Case 1: Strong case — Invoice for goods, EUR 2500, defendant DE, successful ──
-    c1_id = uuid.uuid4()
-    cases.append({
-        "case": Case(
-            id=c1_id,
-            user_id=admin_user_id,
-            title="Müller GmbH vs. Fischer OHG — Warenlieferung Elektronikteile",
-            status=CaseStatus.COMPLETED,
-            court_name="Amtsgericht Stuttgart",
-            court_address="Hauffstraße 5, 70190 Stuttgart",
-            court_country="DE",
-            claimant_is_legal_person=True,
-            claimant_name="Müller Elektronik GmbH",
-            claimant_address="Industriestraße 12, 70569 Stuttgart",
-            claimant_city="Stuttgart",
-            claimant_country="DE",
-            claimant_email="info@mueller-elektronik.de",
-            defendant_is_legal_person=True,
-            defendant_name="Fischer Handels OHG",
-            defendant_address="Königstraße 40, 70173 Stuttgart",
-            defendant_city="Stuttgart",
-            defendant_country="DE",
-            defendant_email="office@fischer-handel.de",
-            jurisdiction_basis="Art. 4 Abs. 1 EuGVVO",
-            claimant_domicile_country="DE",
-            defendant_domicile_country="DE",
-            court_member_state="DE",
-            is_cross_border=False,
-            claim_amount=2500.0,
-            claim_currency="EUR",
-            claim_request_costs=True,
-            claim_interest_rate=5.0,
-            claim_interest_from_date="2025-04-01",
-            claim_interest_type="statutory",
-            claim_description=(
-                "Lieferung von Elektronikbauteilen gemäß Kaufvertrag vom 01.02.2025. "
-                "Ware am 15.02.2025 geliefert und angenommen. "
-                "Rechnung Nr. 2025-0198 über EUR 2.500 war am 01.04.2025 fällig. "
-                "Trotz Mahnung erfolgte keine Zahlung."
-            ),
-            claim_basis="Kaufvertrag, Auftragsbestätigung, Lieferschein",
-            claim_evidence=(
-                "Kaufvertrag, Auftragsbestätigung, Lieferschein mit Empfangsbestätigung, "
-                "Rechnung Nr. 2025-0198, Mahnung mit Fristsetzung"
-            ),
-            applicability_result="applicable",
-            success_probability=0.85,
-            assessment_summary=(
-                "Starke Beweislage: schriftlicher Vertrag, Liefernachweis, "
-                "dokumentierte Mahnung. Hohe Erfolgswahrscheinlichkeit."
-            ),
-            created_at=now - timedelta(days=90),
-            updated_at=now - timedelta(days=5),
-        ),
-        "events": [
-            CaseEvent(id=uuid.uuid4(), case_id=c1_id,
-                      event_type=CaseEventType.FILED,
-                      payload={"court": "Amtsgericht Stuttgart", "date": "2025-05-01"},
-                      created_at=now - timedelta(days=85)),
-            CaseEvent(id=uuid.uuid4(), case_id=c1_id,
-                      event_type=CaseEventType.SERVICE_OK,
-                      payload={"method": "post", "date": "2025-05-15"},
-                      created_at=now - timedelta(days=70)),
-            CaseEvent(id=uuid.uuid4(), case_id=c1_id,
-                      event_type=CaseEventType.DEFAULT,
-                      payload={"reason": "no_response_within_30_days", "date": "2025-06-15"},
-                      created_at=now - timedelta(days=40)),
-            CaseEvent(id=uuid.uuid4(), case_id=c1_id,
-                      event_type=CaseEventType.JUDGMENT_WIN,
-                      payload={"amount_awarded": 2500.0, "date": "2025-06-20"},
-                      created_at=now - timedelta(days=35)),
-            CaseEvent(id=uuid.uuid4(), case_id=c1_id,
-                      event_type=CaseEventType.PAYMENT_RECEIVED,
-                      payload={"amount": 2500.0, "method": "bank_transfer", "date": "2025-07-10"},
-                      created_at=now - timedelta(days=5)),
-        ],
-        "score_overrides": {
-            "evidence_score": 90.0,
-            "p_served": 0.80, "p_default": 0.55, "p_win_contested": 0.75,
-            "p_settle": 0.25, "p_collect": 0.70, "p_cash_success": 0.52,
-            "pipeline_v3": {
-                "p_recht": 0.92, "p_entstanden": 0.95, "p_nicht_untergegangen": 0.98,
-                "p_durchsetzbar": 0.99, "p_beweis": 0.88, "p_obsiegen": 0.81,
-                "p_eintreibung": 0.85, "p_gesamt": 0.69,
-                "ev_betreiber": 220.0, "take_case": True,
-                "claim_type": "invoice", "court_country": "DE",
-                "element_scores": {"contract_basis": 0.95, "performance": 0.92,
-                                   "amount_due": 0.90, "non_payment": 0.88},
-            },
-        },
-    })
-
-    # ── Case 2: Weak case — Oral agreement, EUR 800, no evidence, unsuccessful ──
-    c2_id = uuid.uuid4()
-    cases.append({
-        "case": Case(
-            id=c2_id,
-            user_id=admin_user_id,
-            title="Schneider vs. Braun — Mündlicher Dienstleistungsvertrag",
-            status=CaseStatus.COMPLETED,
-            court_name="Amtsgericht Berlin-Mitte",
-            court_address="Littenstraße 12-17, 10179 Berlin",
-            court_country="DE",
-            claimant_is_legal_person=False,
-            claimant_name="Hans Schneider",
-            claimant_address="Berliner Str. 22, 10115 Berlin",
-            claimant_city="Berlin",
-            claimant_country="DE",
-            claimant_email="h.schneider@email.de",
-            defendant_is_legal_person=False,
-            defendant_name="Karl Braun",
-            defendant_address="Münchener Str. 5, 10789 Berlin",
-            defendant_city="Berlin",
-            defendant_country="DE",
-            defendant_email="k.braun@email.de",
-            jurisdiction_basis="Art. 4 Abs. 1 EuGVVO",
-            claimant_domicile_country="DE",
-            defendant_domicile_country="DE",
-            court_member_state="DE",
-            is_cross_border=False,
-            claim_amount=800.0,
-            claim_currency="EUR",
-            claim_description=(
-                "Mündlich vereinbarte Gartenarbeiten im März 2025. "
-                "Kein schriftlicher Vertrag. Arbeiten wurden erbracht, "
-                "jedoch keine Dokumentation der Leistung vorhanden."
-            ),
-            claim_basis="Mündliche Vereinbarung",
-            claim_evidence="Keine schriftlichen Nachweise",
-            applicability_result="applicable",
-            success_probability=0.20,
-            assessment_summary=(
-                "Schwache Beweislage: nur mündliche Vereinbarung, "
-                "keine Dokumentation. Geringe Erfolgsaussichten."
-            ),
-            created_at=now - timedelta(days=80),
-            updated_at=now - timedelta(days=30),
-        ),
-        "events": [
-            CaseEvent(id=uuid.uuid4(), case_id=c2_id,
-                      event_type=CaseEventType.FILED,
-                      payload={"court": "Amtsgericht Berlin-Mitte", "date": "2025-05-15"},
-                      created_at=now - timedelta(days=75)),
-            CaseEvent(id=uuid.uuid4(), case_id=c2_id,
-                      event_type=CaseEventType.SERVICE_OK,
-                      payload={"method": "post", "date": "2025-06-01"},
-                      created_at=now - timedelta(days=60)),
-            CaseEvent(id=uuid.uuid4(), case_id=c2_id,
-                      event_type=CaseEventType.DEFENDANT_RESPONDED,
-                      payload={"response_type": "contest", "date": "2025-06-20"},
-                      created_at=now - timedelta(days=45)),
-            CaseEvent(id=uuid.uuid4(), case_id=c2_id,
-                      event_type=CaseEventType.JUDGMENT_LOSS,
-                      payload={"reason": "insufficient_evidence", "date": "2025-07-15"},
-                      created_at=now - timedelta(days=30)),
-        ],
-        "score_overrides": {
-            "evidence_score": 15.0,
-            "p_served": 0.70, "p_default": 0.40, "p_win_contested": 0.15,
-            "p_settle": 0.10, "p_collect": 0.30, "p_cash_success": 0.05,
-            "pipeline_v3": {
-                "p_recht": 0.45, "p_entstanden": 0.50, "p_nicht_untergegangen": 0.95,
-                "p_durchsetzbar": 0.95, "p_beweis": 0.20, "p_obsiegen": 0.09,
-                "p_eintreibung": None, "p_gesamt": None,
-                "ev_betreiber": -180.0, "take_case": False,
-                "claim_type": "werklohn", "court_country": "DE",
-                "element_scores": {"contract_basis": 0.15, "performance": 0.25,
-                                   "amount_due": 0.30, "non_payment": 0.20},
-            },
-        },
-    })
-
-    # ── Case 3: Disputed case — Contract dispute, EUR 3000, settled ──
-    c3_id = uuid.uuid4()
-    cases.append({
-        "case": Case(
-            id=c3_id,
-            user_id=admin_user_id,
-            title="Weber GmbH vs. Rossi S.r.l. — Qualitätsstreit Textilien",
-            status=CaseStatus.COMPLETED,
-            court_name="Amtsgericht München",
-            court_address="Pacellistraße 5, 80333 München",
-            court_country="DE",
-            claimant_is_legal_person=True,
-            claimant_name="Weber Mode GmbH",
-            claimant_address="Maximilianstraße 10, 80539 München",
-            claimant_city="München",
-            claimant_country="DE",
-            claimant_email="recht@weber-mode.de",
-            defendant_is_legal_person=True,
-            defendant_name="Rossi Tessuti S.r.l.",
-            defendant_address="Via Monte Napoleone 8, 20121 Milano",
-            defendant_city="Milano",
-            defendant_country="IT",
-            defendant_email="legale@rossi-tessuti.it",
-            jurisdiction_basis="Art. 7 Nr. 1 lit. b EuGVVO",
-            jurisdiction_details="Defendant disputes quality of delivered textiles",
-            claimant_domicile_country="DE",
-            defendant_domicile_country="IT",
-            court_member_state="DE",
-            is_cross_border=True,
-            claim_amount=3000.0,
-            claim_currency="EUR",
-            claim_request_costs=True,
-            claim_interest_rate=5.0,
-            claim_interest_from_date="2025-03-01",
-            claim_description=(
-                "Lieferung von Textilien gemäß Vertrag. "
-                "Beklagter beanstandet die Qualität und verweigert Zahlung. "
-                "Klägerin bestreitet Mängel."
-            ),
-            claim_basis="Kaufvertrag vom 10.01.2025",
-            claim_evidence=(
-                "Kaufvertrag, Lieferschein, Qualitätszertifikat, "
-                "Reklamationsschreiben des Beklagten"
-            ),
-            applicability_result="applicable",
-            success_probability=0.55,
-            assessment_summary=(
-                "Streitfall mit Qualitätsdispute. "
-                "Vergleich erzielt: EUR 2.400 (80% der Forderung)."
-            ),
-            created_at=now - timedelta(days=100),
-            updated_at=now - timedelta(days=15),
-        ),
-        "events": [
-            CaseEvent(id=uuid.uuid4(), case_id=c3_id,
-                      event_type=CaseEventType.FILED,
-                      payload={"court": "Amtsgericht München", "date": "2025-04-10"},
-                      created_at=now - timedelta(days=95)),
-            CaseEvent(id=uuid.uuid4(), case_id=c3_id,
-                      event_type=CaseEventType.SERVICE_OK,
-                      payload={"method": "post_registered", "date": "2025-04-25"},
-                      created_at=now - timedelta(days=80)),
-            CaseEvent(id=uuid.uuid4(), case_id=c3_id,
-                      event_type=CaseEventType.DEFENDANT_RESPONDED,
-                      payload={"response_type": "contest", "defense": "quality_dispute", "date": "2025-05-15"},
-                      created_at=now - timedelta(days=60)),
-            CaseEvent(id=uuid.uuid4(), case_id=c3_id,
-                      event_type=CaseEventType.SETTLED,
-                      payload={"settlement_amount": 2400.0, "date": "2025-06-10",
-                               "note": "Vergleich: EUR 2.400 in einer Summe"},
-                      created_at=now - timedelta(days=35)),
-            CaseEvent(id=uuid.uuid4(), case_id=c3_id,
-                      event_type=CaseEventType.PAYMENT_RECEIVED,
-                      payload={"amount": 2400.0, "date": "2025-07-01", "method": "bank_transfer"},
-                      created_at=now - timedelta(days=15)),
-        ],
-        "score_overrides": {
-            "evidence_score": 65.0,
-            "p_served": 0.75, "p_default": 0.35, "p_win_contested": 0.50,
-            "p_settle": 0.45, "p_collect": 0.60, "p_cash_success": 0.35,
-            "pipeline_v3": {
-                "p_recht": 0.68, "p_entstanden": 0.75, "p_nicht_untergegangen": 0.95,
-                "p_durchsetzbar": 0.96, "p_beweis": 0.60, "p_obsiegen": 0.41,
-                "p_eintreibung": 0.75, "p_gesamt": 0.31,
-                "ev_betreiber": 50.0, "take_case": False,
-                "claim_type": "invoice", "court_country": "DE",
-                "element_scores": {"contract_basis": 0.80, "performance": 0.55,
-                                   "amount_due": 0.60, "non_payment": 0.50},
-            },
-        },
-    })
-
-    # ── Case 4: Insolvency case — Strong evidence, EUR 4500, defendant insolvent, unsuccessful ──
-    c4_id = uuid.uuid4()
-    cases.append({
-        "case": Case(
-            id=c4_id,
-            user_id=admin_user_id,
-            title="Becker e.K. vs. Novak s.r.o. — Zahlungsausfall wegen Insolvenz",
-            status=CaseStatus.COMPLETED,
-            court_name="Amtsgericht Köln",
-            court_address="Luxemburger Str. 101, 50939 Köln",
-            court_country="DE",
-            claimant_is_legal_person=False,
-            claimant_name="Thomas Becker e.K.",
-            claimant_address="Apostelnstraße 15, 50667 Köln",
-            claimant_city="Köln",
-            claimant_country="DE",
-            claimant_email="t.becker@becker-it.de",
-            defendant_is_legal_person=True,
-            defendant_name="Novak Strojírenství s.r.o.",
-            defendant_address="Václavské náměstí 10, 110 00 Praha",
-            defendant_city="Praha",
-            defendant_country="CZ",
-            defendant_email="info@novak-stroj.cz",
-            jurisdiction_basis="Art. 4 Abs. 1 EuGVVO",
-            claimant_domicile_country="DE",
-            defendant_domicile_country="CZ",
-            court_member_state="DE",
-            is_cross_border=True,
-            claim_amount=4500.0,
-            claim_currency="EUR",
-            claim_request_costs=True,
-            claim_interest_rate=5.0,
-            claim_interest_from_date="2025-02-01",
-            claim_description=(
-                "Lieferung von IT-Ausstattung an Beklagte. "
-                "Vollständige Dokumentation vorhanden. "
-                "Beklagte hat Insolvenz angemeldet."
-            ),
-            claim_basis="Kaufvertrag, Auftragsbestätigung, Lieferschein",
-            claim_evidence=(
-                "Kaufvertrag, Auftragsbestätigung, Lieferschein, "
-                "Rechnung Nr. BIT-2025-044, zwei Mahnungen, "
-                "Insolvenzbekanntmachung des Handelsregisters"
-            ),
-            applicability_result="applicable",
-            success_probability=0.15,
-            assessment_summary=(
-                "Starke Beweislage, aber Beklagter ist insolvent. "
-                "Urteil gewonnen, Vollstreckung gescheitert."
-            ),
-            created_at=now - timedelta(days=120),
-            updated_at=now - timedelta(days=20),
-        ),
-        "events": [
-            CaseEvent(id=uuid.uuid4(), case_id=c4_id,
-                      event_type=CaseEventType.FILED,
-                      payload={"court": "Amtsgericht Köln", "date": "2025-03-01"},
-                      created_at=now - timedelta(days=115)),
-            CaseEvent(id=uuid.uuid4(), case_id=c4_id,
-                      event_type=CaseEventType.SERVICE_OK,
-                      payload={"method": "post", "date": "2025-03-20"},
-                      created_at=now - timedelta(days=100)),
-            CaseEvent(id=uuid.uuid4(), case_id=c4_id,
-                      event_type=CaseEventType.DEFAULT,
-                      payload={"reason": "no_response", "date": "2025-04-20"},
-                      created_at=now - timedelta(days=70)),
-            CaseEvent(id=uuid.uuid4(), case_id=c4_id,
-                      event_type=CaseEventType.JUDGMENT_WIN,
-                      payload={"amount_awarded": 4500.0, "date": "2025-04-25"},
-                      created_at=now - timedelta(days=65)),
-            CaseEvent(id=uuid.uuid4(), case_id=c4_id,
-                      event_type=CaseEventType.COLLECTION_FAILED,
-                      payload={"reason": "defendant_insolvent", "date": "2025-06-01"},
-                      created_at=now - timedelta(days=20)),
-        ],
-        "score_overrides": {
-            "evidence_score": 85.0,
-            "p_served": 0.78, "p_default": 0.55, "p_win_contested": 0.70,
-            "p_settle": 0.15, "p_collect": 0.10, "p_cash_success": 0.08,
-            "pipeline_v3": {
-                "p_recht": 0.88, "p_entstanden": 0.92, "p_nicht_untergegangen": 0.97,
-                "p_durchsetzbar": 0.99, "p_beweis": 0.82, "p_obsiegen": 0.72,
-                "p_eintreibung": 0.08, "p_gesamt": 0.06,
-                "ev_betreiber": -350.0, "take_case": False,
-                "claim_type": "invoice", "court_country": "DE",
-                "element_scores": {"contract_basis": 0.92, "performance": 0.85,
-                                   "amount_due": 0.82, "non_payment": 0.80},
-            },
-        },
-    })
-
-    # ── Case 5: Cross-border case — IT supplier, EUR 1200, defendant FR, successful via default ──
-    c5_id = uuid.uuid4()
-    cases.append({
-        "case": Case(
-            id=c5_id,
-            user_id=admin_user_id,
-            title="Schmidt IT GmbH vs. Dupont SARL — IT-Dienstleistungen",
-            status=CaseStatus.COMPLETED,
-            court_name="Amtsgericht Frankfurt am Main",
-            court_address="Gerichtsstraße 2, 60313 Frankfurt am Main",
-            court_country="DE",
-            claimant_is_legal_person=True,
-            claimant_name="Schmidt IT Solutions GmbH",
-            claimant_address="Mainzer Landstraße 50, 60325 Frankfurt am Main",
-            claimant_city="Frankfurt am Main",
-            claimant_country="DE",
-            claimant_email="recht@schmidt-it.de",
-            defendant_is_legal_person=True,
-            defendant_name="Dupont Digital SARL",
-            defendant_address="15 Rue de Rivoli, 75001 Paris",
-            defendant_city="Paris",
-            defendant_country="FR",
-            defendant_email="contact@dupont-digital.fr",
-            jurisdiction_basis="Art. 7 Nr. 1 lit. b EuGVVO — Erfüllungsort der Dienstleistung",
-            jurisdiction_details="IT-Dienstleistungen remote von Frankfurt aus erbracht",
-            claimant_domicile_country="DE",
-            defendant_domicile_country="FR",
-            court_member_state="DE",
-            is_cross_border=True,
-            claim_amount=1200.0,
-            claim_currency="EUR",
-            claim_request_costs=True,
-            claim_interest_rate=5.0,
-            claim_interest_from_date="2025-05-01",
-            claim_description=(
-                "Remote-IT-Support und Systemwartung für die Beklagte "
-                "im Zeitraum Januar bis März 2025. "
-                "Beklagte reagierte nicht auf Rechnungen und Mahnungen."
-            ),
-            claim_basis="Dienstleistungsvertrag vom 15.12.2024, E-Mail-Korrespondenz",
-            claim_evidence=(
-                "Vertrag, Stundennachweise, Rechnung Nr. SIT-2025-031, "
-                "zwei Mahnungen per Einschreiben"
-            ),
-            applicability_result="applicable",
-            success_probability=0.72,
-            assessment_summary=(
-                "Grenzüberschreitend DE→FR. Versäumnisurteil nach ausbleibender Reaktion. "
-                "Vollstreckung in Frankreich erfolgreich."
-            ),
-            created_at=now - timedelta(days=110),
-            updated_at=now - timedelta(days=8),
-        ),
-        "events": [
-            CaseEvent(id=uuid.uuid4(), case_id=c5_id,
-                      event_type=CaseEventType.FILED,
-                      payload={"court": "Amtsgericht Frankfurt am Main", "date": "2025-04-01"},
-                      created_at=now - timedelta(days=105)),
-            CaseEvent(id=uuid.uuid4(), case_id=c5_id,
-                      event_type=CaseEventType.SERVICE_OK,
-                      payload={"method": "huissier", "date": "2025-04-20"},
-                      created_at=now - timedelta(days=90)),
-            CaseEvent(id=uuid.uuid4(), case_id=c5_id,
-                      event_type=CaseEventType.DEFAULT,
-                      payload={"reason": "no_response_within_30_days", "date": "2025-05-25"},
-                      created_at=now - timedelta(days=55)),
-            CaseEvent(id=uuid.uuid4(), case_id=c5_id,
-                      event_type=CaseEventType.JUDGMENT_WIN,
-                      payload={"amount_awarded": 1200.0, "date": "2025-05-30"},
-                      created_at=now - timedelta(days=50)),
-            CaseEvent(id=uuid.uuid4(), case_id=c5_id,
-                      event_type=CaseEventType.PAYMENT_RECEIVED,
-                      payload={"amount": 1200.0, "method": "bank_transfer", "date": "2025-07-05"},
-                      created_at=now - timedelta(days=8)),
-        ],
-        "score_overrides": {
-            "evidence_score": 75.0,
-            "p_served": 0.72, "p_default": 0.50, "p_win_contested": 0.60,
-            "p_settle": 0.20, "p_collect": 0.65, "p_cash_success": 0.40,
-            "pipeline_v3": {
-                "p_recht": 0.78, "p_entstanden": 0.82, "p_nicht_untergegangen": 0.97,
-                "p_durchsetzbar": 0.98, "p_beweis": 0.72, "p_obsiegen": 0.56,
-                "p_eintreibung": 0.82, "p_gesamt": 0.46,
-                "ev_betreiber": 80.0, "take_case": False,
-                "claim_type": "werklohn", "court_country": "DE",
-                "element_scores": {"contract_basis": 0.82, "performance": 0.78,
-                                   "amount_due": 0.70, "non_payment": 0.65},
-            },
-        },
-    })
-
-    return cases
-
-
-def _gen_pipeline_v3(group: str, idx_in_group: int, claim_amount: float,
-                     country: str) -> dict:
-    """Generate deterministic pipeline v3 scores for a historical case."""
-    i = idx_in_group
-    if group == "service_fail":
-        pr = round(0.45 + (i % 10) * 0.04, 4)
-        pb = round(0.35 + (i % 10) * 0.035, 4)
-        return {
-            "p_recht": pr, "p_entstanden": round(min(pr * 1.05, 0.99), 4),
-            "p_nicht_untergegangen": 0.95, "p_durchsetzbar": 0.97,
-            "p_beweis": pb, "p_obsiegen": round(pr * pb, 4),
-            "p_eintreibung": None, "p_gesamt": None,
-            "ev_betreiber": round(-120 + i * 3, 2), "take_case": False,
-            "claim_type": "invoice", "court_country": country,
-            "element_scores": {"contract_basis": round(pb + 0.10, 4),
-                               "performance": round(pb + 0.05, 4),
-                               "amount_due": round(pb, 4),
-                               "non_payment": round(max(pb - 0.05, 0.05), 4)},
-        }
-    elif group == "default_collected":
-        pr = round(0.78 + (i % 10) * 0.018, 4)
-        pb = round(0.65 + (i % 10) * 0.023, 4)
-        pe = round(0.75 + (i % 10) * 0.018, 4)
-        po = round(pr * pb, 4)
-        pg = round(po * pe, 4)
-        ev = round(claim_amount * 0.30 * pg - 110, 2)
-        return {
-            "p_recht": pr, "p_entstanden": round(min(pr * 1.03, 0.99), 4),
-            "p_nicht_untergegangen": 0.97, "p_durchsetzbar": 0.99,
-            "p_beweis": pb, "p_obsiegen": po, "p_eintreibung": pe,
-            "p_gesamt": pg, "ev_betreiber": ev, "take_case": po >= 0.80 and ev > 0,
-            "claim_type": "invoice", "court_country": country,
-            "element_scores": {"contract_basis": round(pb + 0.08, 4),
-                               "performance": round(pb + 0.04, 4),
-                               "amount_due": round(pb + 0.02, 4),
-                               "non_payment": round(pb, 4)},
-        }
-    elif group == "default_failed":
-        pr = round(0.80 + (i % 5) * 0.02, 4)
-        pb = round(0.70 + (i % 5) * 0.02, 4)
-        pe = round(0.08 + (i % 5) * 0.04, 4)
-        po = round(pr * pb, 4)
-        pg = round(po * pe, 4)
-        return {
-            "p_recht": pr, "p_entstanden": round(min(pr * 1.02, 0.99), 4),
-            "p_nicht_untergegangen": 0.97, "p_durchsetzbar": 0.99,
-            "p_beweis": pb, "p_obsiegen": po, "p_eintreibung": pe,
-            "p_gesamt": pg, "ev_betreiber": round(-250 + i * 20, 2),
-            "take_case": False, "claim_type": "invoice", "court_country": country,
-            "element_scores": {"contract_basis": round(pb + 0.08, 4),
-                               "performance": round(pb + 0.04, 4),
-                               "amount_due": round(pb, 4),
-                               "non_payment": round(pb - 0.02, 4)},
-        }
-    elif group == "settled":
-        pr = round(0.55 + (i % 10) * 0.025, 4)
-        pb = round(0.48 + (i % 10) * 0.022, 4)
-        pe = round(0.60 + (i % 10) * 0.025, 4)
-        po = round(pr * pb, 4)
-        pg = round(po * pe, 4)
-        ev = round(claim_amount * 0.30 * pg - 110, 2)
-        return {
-            "p_recht": pr, "p_entstanden": round(min(pr * 1.05, 0.99), 4),
-            "p_nicht_untergegangen": 0.95, "p_durchsetzbar": 0.96,
-            "p_beweis": pb, "p_obsiegen": po, "p_eintreibung": pe,
-            "p_gesamt": pg, "ev_betreiber": ev, "take_case": False,
-            "claim_type": "invoice", "court_country": country,
-            "element_scores": {"contract_basis": round(pb + 0.12, 4),
-                               "performance": round(pb + 0.05, 4),
-                               "amount_due": round(pb + 0.03, 4),
-                               "non_payment": round(pb, 4)},
-        }
-    elif group == "judgment_win_failed":
-        pr = round(0.60 + (i % 14) * 0.015, 4)
-        pb = round(0.55 + (i % 14) * 0.014, 4)
-        pe = round(0.10 + (i % 14) * 0.015, 4)
-        po = round(pr * pb, 4)
-        pg = round(po * pe, 4)
-        return {
-            "p_recht": pr, "p_entstanden": round(min(pr * 1.04, 0.99), 4),
-            "p_nicht_untergegangen": 0.96, "p_durchsetzbar": 0.98,
-            "p_beweis": pb, "p_obsiegen": po, "p_eintreibung": pe,
-            "p_gesamt": pg, "ev_betreiber": round(-180 + i * 8, 2),
-            "take_case": False, "claim_type": "invoice", "court_country": country,
-            "element_scores": {"contract_basis": round(pb + 0.10, 4),
-                               "performance": round(pb + 0.05, 4),
-                               "amount_due": round(pb + 0.03, 4),
-                               "non_payment": round(pb, 4)},
-        }
-    elif group == "judgment_loss":
-        pr = round(0.30 + (i % 10) * 0.025, 4)
-        pb = round(0.25 + (i % 10) * 0.025, 4)
-        po = round(pr * pb, 4)
-        return {
-            "p_recht": pr, "p_entstanden": round(min(pr * 1.10, 0.99), 4),
-            "p_nicht_untergegangen": 0.90, "p_durchsetzbar": 0.92,
-            "p_beweis": pb, "p_obsiegen": po,
-            "p_eintreibung": None, "p_gesamt": None,
-            "ev_betreiber": round(-200 + i * 5, 2), "take_case": False,
-            "claim_type": "invoice", "court_country": country,
-            "element_scores": {"contract_basis": round(pb + 0.08, 4),
-                               "performance": round(pb + 0.04, 4),
-                               "amount_due": round(pb, 4),
-                               "non_payment": round(max(pb - 0.05, 0.05), 4)},
-        }
-    else:  # fill/extra successful defaults
-        pr = round(0.82 + (i % 10) * 0.015, 4)
-        pb = round(0.70 + (i % 10) * 0.020, 4)
-        pe = round(0.78 + (i % 10) * 0.018, 4)
-        po = round(pr * pb, 4)
-        pg = round(po * pe, 4)
-        ev = round(claim_amount * 0.30 * pg - 110, 2)
-        return {
-            "p_recht": pr, "p_entstanden": round(min(pr * 1.02, 0.99), 4),
-            "p_nicht_untergegangen": 0.98, "p_durchsetzbar": 0.99,
-            "p_beweis": pb, "p_obsiegen": po, "p_eintreibung": pe,
-            "p_gesamt": pg, "ev_betreiber": ev, "take_case": po >= 0.80 and ev > 0,
-            "claim_type": "invoice", "court_country": country,
-            "element_scores": {"contract_basis": round(pb + 0.10, 4),
-                               "performance": round(pb + 0.05, 4),
-                               "amount_due": round(pb + 0.02, 4),
-                               "non_payment": round(pb, 4)},
-        }
-
-
-def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[CaseEvent], list[dict]]:
-    """Generate 100 historical observation cases with realistic event distributions.
-
-    Target rates:
-      - ~70% service success rate  (70 SERVICE_OK, 30 SERVICE_FAIL)
-      - ~50% default rate          (35 DEFAULT, 35 DEFENDANT_RESPONDED of 70 served)
-      - ~30% settlement rate       (11 SETTLED of 35 responded)
-      - ~60% collection rate       (30 PAYMENT_RECEIVED of ~49 favorable outcomes)
-
-    Each historical case gets a ``[HIST]`` title prefix for easy identification.
-    Returns (cases, events, pipeline_scores) where pipeline_scores maps case_id→pipeline_v3 dict.
-    """
-    now = datetime.utcnow()
-    all_cases: list[Case] = []
-    all_events: list[CaseEvent] = []
-    all_pipeline_scores: list[dict] = []  # {"case_id": ..., "pipeline_v3": ...}
-
-    total = 100
-    served_ok = 70
-    served_fail = 30
-    defaulted = 35          # of 70 served
-    responded = 35          # of 70 served
-    settled = 11            # of 35 responded (~30%)
-    judgment = 24           # responded - settled
-    judgment_win = 14       # of 24 judgment
-    judgment_loss = 10      # of 24 judgment
-    collected = 30          # of 49 favorable (defaulted + judgment_win)
-    collection_failed = 19  # of 49 favorable
-
-    case_idx = 0
-    group_idx = 0  # index within current group
-    countries = ["DE", "FR", "IT", "AT", "NL", "ES", "BE"]
-
-    def _make_hist_case(idx: int) -> Case:
-        return Case(
-            id=uuid.uuid4(),
-            user_id=admin_user_id,
-            title=f"[HIST] Historischer Fall #{idx + 1:03d}",
-            status=CaseStatus.COMPLETED,
-            claim_amount=round(500 + (idx * 47) % 4500, 2),
-            claim_currency="EUR",
-            claimant_name=f"Kläger {idx + 1}",
-            defendant_name=f"Beklagter {idx + 1}",
-            claimant_country=countries[idx % 7],
-            defendant_country=countries[(idx + 3) % 7],
-            is_cross_border=True,
-            created_at=now - timedelta(days=365 - idx),
-            updated_at=now - timedelta(days=30),
-        )
-
-    def _ev(case_id: UUID, etype: CaseEventType, days_ago: int) -> CaseEvent:
-        return CaseEvent(
-            id=uuid.uuid4(),
-            case_id=case_id,
-            event_type=etype,
-            payload={"source": "historical_seed"},
-            created_at=now - timedelta(days=max(days_ago, 1)),
-        )
-
-    # ── Group 1: service failed (30 cases) ──
-    group_idx = 0
-    for _ in range(served_fail):
-        c = _make_hist_case(case_idx)
-        c.status = CaseStatus.REJECTED
-        all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_FAIL, 340 - case_idx))
-        pv3 = _gen_pipeline_v3("service_fail", group_idx, c.claim_amount, c.claimant_country or "DE")
-        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": False})
-        case_idx += 1; group_idx += 1
-
-    # ── Group 2: served -> defaulted -> collected ──
-    defaults_collected = min(collected, defaulted)  # 30 (limited by defaulted=35)
-    group_idx = 0
-    for _ in range(defaults_collected):
-        c = _make_hist_case(case_idx)
-        all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_OK, 340 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.DEFAULT, 310 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.JUDGMENT_WIN, 300 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.PAYMENT_RECEIVED, 270 - case_idx))
-        pv3 = _gen_pipeline_v3("default_collected", group_idx, c.claim_amount, c.claimant_country or "DE")
-        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": True})
-        case_idx += 1; group_idx += 1
-
-    # ── Group 3: served -> defaulted -> collection failed ──
-    defaults_failed = defaulted - defaults_collected  # 5
-    group_idx = 0
-    for _ in range(defaults_failed):
-        c = _make_hist_case(case_idx)
-        all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_OK, 340 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.DEFAULT, 310 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.JUDGMENT_WIN, 300 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.COLLECTION_FAILED, 270 - case_idx))
-        pv3 = _gen_pipeline_v3("default_failed", group_idx, c.claim_amount, c.claimant_country or "DE")
-        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": False})
-        case_idx += 1; group_idx += 1
-
-    # ── Group 4: served -> responded -> settled -> payment ──
-    group_idx = 0
-    for _ in range(settled):
-        c = _make_hist_case(case_idx)
-        all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_OK, 340 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.DEFENDANT_RESPONDED, 320 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SETTLED, 300 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.PAYMENT_RECEIVED, 280 - case_idx))
-        pv3 = _gen_pipeline_v3("settled", group_idx, c.claim_amount, c.claimant_country or "DE")
-        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": True})
-        case_idx += 1; group_idx += 1
-
-    # ── Group 5: served -> responded -> judgment win -> collected ──
-    win_collected = max(0, collected - defaults_collected)
-    group_idx = 0
-    for i in range(min(win_collected, judgment_win)):
-        c = _make_hist_case(case_idx)
-        all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_OK, 340 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.DEFENDANT_RESPONDED, 320 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.JUDGMENT_WIN, 290 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.PAYMENT_RECEIVED, 260 - case_idx))
-        pv3 = _gen_pipeline_v3("default_collected", group_idx + 30, c.claim_amount, c.claimant_country or "DE")
-        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": True})
-        case_idx += 1; group_idx += 1
-
-    # ── Group 6: served -> responded -> judgment win -> collection failed ──
-    win_not_collected = judgment_win - min(win_collected, judgment_win)
-    remaining_coll_fail = max(0, collection_failed - defaults_failed)
-    win_failed = min(win_not_collected, remaining_coll_fail)
-    group_idx = 0
-    for _ in range(win_failed):
-        c = _make_hist_case(case_idx)
-        all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_OK, 340 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.DEFENDANT_RESPONDED, 320 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.JUDGMENT_WIN, 290 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.COLLECTION_FAILED, 260 - case_idx))
-        pv3 = _gen_pipeline_v3("judgment_win_failed", group_idx, c.claim_amount, c.claimant_country or "DE")
-        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": False})
-        case_idx += 1; group_idx += 1
-
-    # ── Group 7: served -> responded -> judgment loss ──
-    group_idx = 0
-    for _ in range(judgment_loss):
-        c = _make_hist_case(case_idx)
-        all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_OK, 340 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.DEFENDANT_RESPONDED, 320 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.JUDGMENT_LOSS, 290 - case_idx))
-        pv3 = _gen_pipeline_v3("judgment_loss", group_idx, c.claim_amount, c.claimant_country or "DE")
-        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": False})
-        case_idx += 1; group_idx += 1
-
-    # ── Fill remaining to reach exactly 100 (extra successful default cases) ──
-    group_idx = 0
-    while case_idx < total:
-        c = _make_hist_case(case_idx)
-        all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_OK, 340 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.DEFAULT, 310 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.JUDGMENT_WIN, 300 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.PAYMENT_RECEIVED, 270 - case_idx))
-        pv3 = _gen_pipeline_v3("fill", group_idx, c.claim_amount, c.claimant_country or "DE")
-        all_pipeline_scores.append({"case_id": c.id, "pipeline_v3": pv3, "outcome": True})
-        case_idx += 1; group_idx += 1
-
-    return all_cases, all_events, all_pipeline_scores
-
-
 @router.post("/seed", response_model=SeedResponse, status_code=status.HTTP_201_CREATED)
 async def seed_demo_data(
     admin: User = Depends(_require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Seed 5 fictional completed cases + 100 historical observation cases.
+    """Seed 30 fictional cases from SEED_SCENARIOS.
 
-    Always recreates: deletes old seed data first to ensure exactly 5 fictional
-    cases and 100 historical cases exist with current definitions.
+    Always recreates: deletes old seed data first.
     """
     try:
-        # ── Build seed data ──
-        seed_data = _build_seed_cases(admin.id)
-        seed_titles = [item["case"].title for item in seed_data]
+        # Build seed data from the 100 scenarios
+        seed_cases, seed_events, seed_pipeline = _build_seed_from_scenarios(admin.id)
+        seed_ids = [c.id for c in seed_cases]
 
-        # ── Delete old fictional seed cases (by matching titles) ──
-        old_fictional_result = await db.execute(
-            select(Case.id).where(Case.title.in_(seed_titles))
+        # Delete old seed cases (model_version = v3-seed)
+        old_seed_scores = await db.execute(
+            select(CaseProcessScore.case_id).where(
+                CaseProcessScore.model_version == "v3-seed"
+            )
         )
-        old_fictional_ids = list(old_fictional_result.scalars().all())
+        old_seed_case_ids = list(old_seed_scores.scalars().all())
 
-        if old_fictional_ids:
-            await db.execute(delete(CaseEvent).where(CaseEvent.case_id.in_(old_fictional_ids)))
-            await db.execute(delete(CaseProcessScore).where(CaseProcessScore.case_id.in_(old_fictional_ids)))
-            await db.execute(delete(CaseLLMTrace).where(CaseLLMTrace.case_id.in_(old_fictional_ids)))
-            await db.execute(delete(ChatMessage).where(ChatMessage.case_id.in_(old_fictional_ids)))
-            await db.execute(delete(Document).where(Document.case_id.in_(old_fictional_ids)))
-            await db.execute(delete(Case).where(Case.id.in_(old_fictional_ids)))
+        # Also find [TEST] cases
+        old_test_result = await db.execute(
+            select(Case.id).where(Case.title.like("[TEST]%"))
+        )
+        old_test_ids = list(old_test_result.scalars().all())
 
-        # ── Delete old historical seed cases ──
+        # Also find [HIST] cases from old format
         old_hist_result = await db.execute(
             select(Case.id).where(Case.title.like("[HIST]%"))
         )
         old_hist_ids = list(old_hist_result.scalars().all())
 
-        if old_hist_ids:
-            # Delete in batches to avoid query size limits
-            for i in range(0, len(old_hist_ids), 50):
-                batch = old_hist_ids[i:i + 50]
+        all_old_ids = list(set(old_seed_case_ids + old_test_ids + old_hist_ids))
+
+        if all_old_ids:
+            for i in range(0, len(all_old_ids), 50):
+                batch = all_old_ids[i:i + 50]
                 await db.execute(delete(CaseEvent).where(CaseEvent.case_id.in_(batch)))
                 await db.execute(delete(CaseProcessScore).where(CaseProcessScore.case_id.in_(batch)))
+                await db.execute(delete(CaseLLMTrace).where(CaseLLMTrace.case_id.in_(batch)))
+                await db.execute(delete(ChatMessage).where(ChatMessage.case_id.in_(batch)))
+                await db.execute(delete(Document).where(Document.case_id.in_(batch)))
                 await db.execute(delete(Case).where(Case.id.in_(batch)))
 
         await db.flush()
 
-        # ── Create 5 fictional cases ──
-        fictional_count = 0
-        for item in seed_data:
-            db.add(item["case"])
-            for event in item["events"]:
-                db.add(event)
-
-            overrides = item["score_overrides"]
-            pv3 = overrides.get("pipeline_v3", {})
-            score = CaseProcessScore(
-                case_id=item["case"].id,
-                evidence_score=overrides.get("evidence_score", 50.0),
-                evidence_breakdown={"source": "seed_data"},
-                ability_score=75.0,
-                ability_components={"source": "seed_data"},
-                willingness_score=50.0,
-                willingness_components={"source": "seed_data"},
-                p_served=overrides.get("p_served", 0.70),
-                p_default=overrides.get("p_default", 0.50),
-                p_win_contested=overrides.get("p_win_contested", 0.50),
-                p_settle=overrides.get("p_settle", 0.30),
-                p_collect=overrides.get("p_collect", 0.60),
-                p_cash_success=overrides.get("p_cash_success", 0.25),
-                priors_json={"source": "seed_data"},
-                posteriors_json={"pipeline_v3": pv3},
-                observations_json={"source": "seed_data"},
-                drivers_json=[],
-                model_version="v3-seed",
-            )
-            db.add(score)
-            fictional_count += 1
-
-        # ── Create 100 historical cases ──
-        hist_cases, hist_events, hist_pipeline = _build_historical_events(admin.id)
-        for c in hist_cases:
+        # Create 100 fictional cases
+        for c in seed_cases:
             db.add(c)
-        for e in hist_events:
+        for e in seed_events:
             db.add(e)
-        # Create CaseProcessScore for each historical case with pipeline v3 data
-        for ps in hist_pipeline:
+
+        # Create CaseProcessScore for each case with pipeline v3 data
+        for ps in seed_pipeline:
             pv3 = ps["pipeline_v3"]
             p_obsiegen = pv3.get("p_obsiegen", 0.0)
             score = CaseProcessScore(
                 case_id=ps["case_id"],
                 evidence_score=50.0,
-                evidence_breakdown={"source": "historical_seed"},
+                evidence_breakdown={"source": "seed_scenario"},
                 ability_score=50.0,
-                ability_components={"source": "historical_seed"},
+                ability_components={"source": "seed_scenario"},
                 willingness_score=50.0,
-                willingness_components={"source": "historical_seed"},
+                willingness_components={"source": "seed_scenario"},
                 p_served=pv3.get("p_recht", 0.5),
                 p_default=pv3.get("p_beweis", 0.5),
                 p_win_contested=p_obsiegen,
                 p_settle=0.0,
                 p_collect=pv3.get("p_eintreibung") or 0.0,
                 p_cash_success=pv3.get("p_gesamt") or p_obsiegen,
-                priors_json={"source": "historical_seed"},
+                priors_json={"source": "seed_scenario"},
                 posteriors_json={"pipeline_v3": pv3},
-                observations_json={"source": "historical_seed"},
+                observations_json={"source": "seed_scenario"},
                 drivers_json=[],
                 model_version="v3-seed",
             )
             db.add(score)
-        historical_event_count = len(hist_events)
 
         await db.commit()
 
-        msg = (
-            f"{fictional_count} fiktive Fälle und 100 historische Fälle "
-            f"({historical_event_count} Events) erstellt."
-        )
-
         return SeedResponse(
-            fictional_cases_created=fictional_count,
-            historical_aggregate_events_created=historical_event_count,
-            message=msg,
+            fictional_cases_created=len(seed_cases),
+            historical_aggregate_events_created=len(seed_events),
+            message=f"{len(seed_cases)} fiktive Fälle mit {len(seed_events)} Events erstellt.",
         )
 
     except Exception:
@@ -1484,7 +857,150 @@ async def seed_demo_data(
 
 
 # ---------------------------------------------------------------------------
-# 3) POST /api/statistics/update-priors  (admin only)
+# 3) POST /api/statistics/test-case  (admin only)
+# ---------------------------------------------------------------------------
+
+@router.post("/test-case", response_model=TestCaseResponse, status_code=status.HTTP_201_CREATED)
+async def create_test_case(
+    req: TestCaseRequest,
+    admin: User = Depends(_require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a custom test case with user-defined probabilities.
+
+    The new case is added to the statistics and the Bayes learning
+    progression is updated accordingly.
+    """
+    try:
+        now = datetime.utcnow()
+        case_id = uuid.uuid4()
+        is_cb = req.claimant_country != req.defendant_country
+        outcome = req.outcome.lower()
+        is_success = outcome in ("won", "settled")
+
+        case_status = CaseStatus.COMPLETED
+        if outcome == "withdrawn":
+            case_status = CaseStatus.REJECTED
+
+        c = Case(
+            id=case_id,
+            user_id=admin.id,
+            title=f"[TEST] {req.title}",
+            status=case_status,
+            court_country=req.court_country,
+            claimant_is_legal_person=True,
+            claimant_name=req.claimant_name,
+            claimant_country=req.claimant_country,
+            defendant_is_legal_person=True,
+            defendant_name=req.defendant_name,
+            defendant_country=req.defendant_country,
+            is_cross_border=is_cb,
+            claim_amount=req.claim_amount,
+            claim_currency="EUR",
+            claim_description=req.description,
+            claim_evidence=req.evidence_desc,
+            assessment_summary=f"Benutzerdefinierter Testfall: p_recht={req.p_recht}, p_beweis={req.p_beweis}",
+            success_probability=round(req.p_recht * req.p_beweis, 2),
+            applicability_result="applicable",
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(c)
+
+        # Create events based on outcome
+        event_sequence = []
+        if outcome == "won":
+            event_sequence = [
+                CaseEventType.FILED, CaseEventType.SERVICE_OK,
+                CaseEventType.DEFAULT, CaseEventType.JUDGMENT_WIN,
+                CaseEventType.PAYMENT_RECEIVED,
+            ]
+        elif outcome == "lost":
+            event_sequence = [
+                CaseEventType.FILED, CaseEventType.SERVICE_OK,
+                CaseEventType.DEFENDANT_RESPONDED, CaseEventType.JUDGMENT_LOSS,
+            ]
+        elif outcome == "settled":
+            event_sequence = [
+                CaseEventType.FILED, CaseEventType.SERVICE_OK,
+                CaseEventType.DEFENDANT_RESPONDED, CaseEventType.SETTLED,
+                CaseEventType.PAYMENT_RECEIVED,
+            ]
+        elif outcome == "withdrawn":
+            event_sequence = [CaseEventType.FILED]
+
+        for ev_idx, etype in enumerate(event_sequence):
+            db.add(CaseEvent(
+                id=uuid.uuid4(),
+                case_id=case_id,
+                event_type=etype,
+                payload={"source": "test_case"},
+                created_at=now - timedelta(hours=len(event_sequence) - ev_idx),
+            ))
+
+        # Compute pipeline v3
+        scenario = {
+            "p_recht": req.p_recht,
+            "p_beweis": req.p_beweis,
+            "p_eintreibung": req.p_eintreibung,
+            "claim_type": req.claim_type,
+            "court_country": req.court_country,
+        }
+        pv3 = _compute_pipeline_v3(scenario, req.claim_amount)
+
+        score = CaseProcessScore(
+            case_id=case_id,
+            evidence_score=50.0,
+            evidence_breakdown={"source": "test_case"},
+            ability_score=50.0,
+            ability_components={"source": "test_case"},
+            willingness_score=50.0,
+            willingness_components={"source": "test_case"},
+            p_served=req.p_recht,
+            p_default=req.p_beweis,
+            p_win_contested=round(req.p_recht * req.p_beweis, 4),
+            p_settle=0.0,
+            p_collect=req.p_eintreibung or 0.0,
+            p_cash_success=pv3.get("p_gesamt") or pv3.get("p_obsiegen", 0.0),
+            priors_json={"source": "test_case"},
+            posteriors_json={"pipeline_v3": pv3},
+            observations_json={"source": "test_case"},
+            drivers_json=[],
+            model_version="v3-seed",
+        )
+        db.add(score)
+
+        await db.commit()
+
+        pipeline_resp = PipelineScores(
+            p_recht=pv3.get("p_recht", 0.0),
+            p_beweis=pv3.get("p_beweis", 0.0),
+            p_obsiegen=pv3.get("p_obsiegen", 0.0),
+            p_eintreibung=pv3.get("p_eintreibung"),
+            p_gesamt=pv3.get("p_gesamt"),
+            ev_betreiber=pv3.get("ev_betreiber"),
+            take_case=pv3.get("take_case"),
+            claim_type=req.claim_type,
+            court_country=req.court_country,
+        )
+
+        return TestCaseResponse(
+            case_id=case_id,
+            message=f"Testfall '{req.title}' erstellt. Statistik wird aktualisiert.",
+            pipeline=pipeline_resp,
+        )
+
+    except Exception:
+        await db.rollback()
+        logger.exception("Error creating test case")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Fehler beim Erstellen des Testfalls.",
+        )
+
+
+# ---------------------------------------------------------------------------
+# 4) POST /api/statistics/update-priors  (admin only)
 # ---------------------------------------------------------------------------
 
 @router.post("/update-priors", response_model=UpdatePriorsResponse)
@@ -1492,20 +1008,15 @@ async def update_priors_from_outcomes(
     admin: User = Depends(_require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Recalculate Beta priors from ALL completed-case event outcomes.
-
-    Updates both the 4 internal rates (served, default, settle, collect) used
-    by the scoring formula AND returns the 3 display rates for the UI.
-    """
+    """Recalculate Beta priors from ALL completed-case event outcomes."""
     try:
-        # Load ALL events
         all_events_result = await db.execute(select(CaseEvent))
         all_events = list(all_events_result.scalars().all())
 
         rates_updated: list[str] = []
         priors_items: list[UpdatedPriorItem] = []
 
-        # Update internal 4 rates in PriorsConfig (used by scoring engine)
+        # Update internal 4 rates in PriorsConfig
         for rate_name in ["served", "default", "settle", "collect"]:
             mapping = RATE_EVENT_MAP.get(rate_name, {})
             success_types = mapping.get("success", set())
@@ -1519,7 +1030,6 @@ async def update_priors_from_outcomes(
             new_alpha = base_alpha + successes
             new_beta = base_beta + failures
 
-            # Upsert into PriorsConfig
             existing_result = await db.execute(
                 select(PriorsConfig).where(
                     PriorsConfig.rate_name == rate_name,
@@ -1601,7 +1111,6 @@ async def update_priors_from_outcomes(
 # Expected-Value sub-router  (kept at /api/cases/{case_id}/expected-value)
 # ---------------------------------------------------------------------------
 
-# Approximate court fees by member state for EU Small Claims Procedure
 COURT_FEE_TABLE: dict[str, dict] = {
     "DE": {"base": 32.0, "pct": 0.03, "min": 32.0, "max": 100.0},
     "AT": {"base": 28.0, "pct": 0.02, "min": 28.0, "max": 93.0},
@@ -1630,23 +1139,17 @@ class ExpectedValueResult(BaseModel):
     claim_currency: str
     p_win: float
     p_loss: float
-    # Revenue side
     expected_commission: float
-    # Cost components
     court_fees: float
     attorney_costs: float
     service_fees: float
     opponent_costs: float
-    # Win scenario
-    cost_compensation: float  # court_fees + attorney_costs recovered on win
-    # Net expected value for project owner
+    cost_compensation: float
     net_expected_value: float
-    # Expected loss costs
     expected_loss_costs: float
-    # Decision
     recommendation: str
     recommendation_reason: str
-    min_probability_threshold: float  # 80%
+    min_probability_threshold: float
     breakdown: dict
 
 
@@ -1659,10 +1162,7 @@ async def get_expected_value(
     admin: User = Depends(_require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Calculate expected value for a case based on its latest process score.
-
-    Returns expected recovery, costs, commission, net EV, and a recommendation.
-    """
+    """Calculate expected value for a case based on its latest process score."""
     case_result = await db.execute(select(Case).where(Case.id == case_id))
     case = case_result.scalar_one_or_none()
     if not case:
@@ -1677,7 +1177,6 @@ async def get_expected_value(
             detail="Keine Forderungshöhe angegeben. Bitte zuerst claim_amount setzen.",
         )
 
-    # Get latest process score (or compute on the fly)
     score_result = await db.execute(
         select(CaseProcessScore)
         .where(CaseProcessScore.case_id == case_id)
@@ -1693,7 +1192,6 @@ async def get_expected_value(
     p_win = score.p_cash_success
     p_loss = 1.0 - p_win
 
-    # --- Cost components ---
     court_country = case.court_country or case.court_member_state or "*"
     court_fees = _calculate_court_fees(claim_amount, court_country)
 
@@ -1705,24 +1203,11 @@ async def get_expected_value(
     attorney_costs = _estimate_attorney_costs(claim_amount)
     opponent_costs = _estimate_opponent_costs(claim_amount)
 
-    # --- Project owner EV formula ---
-    # Revenue: p_win × 30% × claim_amount
     expected_commission = p_win * COMMISSION_RATE * claim_amount
-
-    # Cost compensation on win: court_fees + attorney_costs recovered from opponent
     cost_compensation = court_fees + attorney_costs
-
-    # Expected loss costs: p_loss × (own costs excl. service + opponent costs)
-    # On loss we lose court fees, attorney costs, AND pay opponent costs
     expected_loss_costs = p_loss * (court_fees + attorney_costs + opponent_costs)
-
-    # Net EV = expected commission - service_fees (always) - expected loss costs
-    # Equivalent to:
-    #   p_win × (30% × claim + cost_comp - own_costs)
-    #   + p_loss × (-own_costs - opponent_costs)
     net_ev = expected_commission - service_fees - expected_loss_costs
 
-    # --- Recommendation logic (minimum 80% win probability to take case) ---
     MIN_PROBABILITY_THRESHOLD = 0.80
 
     if p_win >= MIN_PROBABILITY_THRESHOLD and net_ev > 0:

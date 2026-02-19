@@ -84,7 +84,31 @@
         </div>
       </section>
 
-      <!-- Bayesian Posteriors (existing 3-rate model) -->
+      <!-- Bayes Learning Visualization -->
+      <section class="card fade-in mt-3" v-if="bayesSteps.length > 0">
+        <h2>Bayesian Learning — Lernverlauf</h2>
+        <p class="text-secondary mb-2">Wie sich die Wahrscheinlichkeitsschätzung mit jedem Fall ändert.</p>
+
+        <div class="bayes-chart">
+          <div class="bayes-chart-header">
+            <span class="chart-legend-item"><span class="dot dot-cb"></span> Vertragsbasis</span>
+            <span class="chart-legend-item"><span class="dot dot-pf"></span> Leistungserbringung</span>
+          </div>
+          <div class="bayes-bars">
+            <div class="bayes-bar-group" v-for="step in contractBasisSteps" :key="'cb-' + step.step">
+              <div class="bar-label">Fall {{ step.step }}</div>
+              <div class="bar-container">
+                <div class="bar bar-cb" :style="{ width: (step.mean * 100) + '%' }"
+                     :title="'Mean: ' + (step.mean * 100).toFixed(1) + '%'">
+                  {{ (step.mean * 100).toFixed(0) }}%
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Bayesian Posteriors -->
       <section class="card fade-in mt-3">
         <h2>{{ t('stats.bayesianLearning') }}</h2>
         <p class="text-secondary mb-2">{{ t('stats.currentPosteriors') }}</p>
@@ -101,357 +125,520 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="rate in posteriors" :key="rate.name">
-              <td><strong>{{ rate.label }}</strong></td>
-              <td>(&alpha;={{ rate.prior_alpha }}, &beta;={{ rate.prior_beta }})</td>
-              <td>{{ rate.successes }} / {{ rate.trials }}</td>
-              <td>(&alpha;'={{ rate.post_alpha.toFixed(1) }}, &beta;'={{ rate.post_beta.toFixed(1) }})</td>
-              <td>
-                <div class="prob-bar-container">
-                  <div class="prob-bar" :style="{ width: (rate.mean * 100) + '%' }"></div>
-                  <span class="prob-bar-label">{{ (rate.mean * 100).toFixed(1) }}%</span>
-                </div>
-              </td>
-              <td class="text-secondary">{{ (rate.ci_low * 100).toFixed(0) }}% - {{ (rate.ci_high * 100).toFixed(0) }}%</td>
+            <tr v-for="p in stats.posteriors" :key="p.name">
+              <td class="font-semibold">{{ p.label }}</td>
+              <td>{{ p.prior_alpha.toFixed(1) }}, {{ p.prior_beta.toFixed(1) }}</td>
+              <td>{{ p.successes }} / {{ p.trials }}</td>
+              <td>{{ p.post_alpha.toFixed(1) }}, {{ p.post_beta.toFixed(1) }}</td>
+              <td class="font-semibold">{{ (p.mean * 100).toFixed(1) }}%</td>
+              <td>{{ (p.ci_low * 100).toFixed(0) }}% – {{ (p.ci_high * 100).toFixed(0) }}%</td>
             </tr>
           </tbody>
         </table>
       </section>
 
-      <!-- Bayes Learning Progression -->
-      <section class="card fade-in mt-3" v-if="bayesSteps.length">
-        <h2>Bayes-Update: Lernprogression</h2>
-        <p class="text-secondary mb-2">
-          Evolution der Beta-Prior-Parameter für Beweisführungselemente über {{ pipelineAgg?.total_evaluated || 0 }} Fälle.
-          Zeigt, wie die Plattform aus abgeschlossenen Fällen lernt.
-        </p>
-
-        <div class="learning-chart">
-          <div class="chart-header">
-            <span class="chart-legend">
-              <span class="legend-dot legend-cb"></span> contract_basis
-              <span class="legend-dot legend-pf"></span> performance
-            </span>
-          </div>
-          <div class="chart-area">
-            <div class="chart-y-axis">
-              <span>100%</span>
-              <span>75%</span>
-              <span>50%</span>
-              <span>25%</span>
-              <span>0%</span>
-            </div>
-            <div class="chart-bars">
-              <div v-for="step in contractBasisSteps" :key="'cb-' + step.step" class="chart-bar-group"
-                   :style="{ left: ((step.step - 1) / maxStep * 100) + '%' }">
-                <div class="chart-bar bar-cb" :style="{ height: (step.mean * 100) + '%' }"
-                     :title="'Schritt ' + step.step + ': ' + (step.mean * 100).toFixed(1) + '%'">
-                </div>
-              </div>
-              <div v-for="step in performanceSteps" :key="'pf-' + step.step" class="chart-bar-group"
-                   :style="{ left: ((step.step - 1) / maxStep * 100 + 1.5) + '%' }">
-                <div class="chart-bar bar-pf" :style="{ height: (step.mean * 100) + '%' }"
-                     :title="'Schritt ' + step.step + ': ' + (step.mean * 100).toFixed(1) + '%'">
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="chart-x-label">Fallnummer (chronologisch)</div>
-        </div>
-
-        <table class="data-table mt-2">
-          <thead>
-            <tr>
-              <th>Schritt</th>
-              <th>Element</th>
-              <th>&alpha;</th>
-              <th>&beta;</th>
-              <th>Posterior &mu;</th>
-              <th>Ausgang</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="step in bayesSteps.slice(0, 20)" :key="step.step + step.element">
-              <td>{{ step.step }}</td>
-              <td><code>{{ step.element }}</code></td>
-              <td>{{ step.alpha.toFixed(2) }}</td>
-              <td>{{ step.beta.toFixed(2) }}</td>
-              <td>
-                <div class="prob-bar-container">
-                  <div class="prob-bar" :style="{ width: (step.mean * 100) + '%' }"></div>
-                  <span class="prob-bar-label">{{ (step.mean * 100).toFixed(1) }}%</span>
-                </div>
-              </td>
-              <td>
-                <span :class="['badge', step.case_outcome === 'success' ? 'badge-completed' : 'badge-rejected']">
-                  {{ step.case_outcome === 'success' ? 'Erfolg' : 'Misserfolg' }}
-                </span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <!-- Learning Insights -->
-      <section class="card fade-in mt-3" v-if="learningInsights.length">
-        <h2>{{ t('stats.learningTitle') }}</h2>
-        <p class="text-secondary mb-2">{{ t('stats.learningDesc') }}</p>
-        <div class="insights-list">
-          <div v-for="insight in learningInsights" :key="insight.rate_name" class="insight-card">
-            <div class="insight-header">
-              <strong>{{ insight.label }}</strong>
-              <div class="insight-delta" :class="insight.posterior_mean >= insight.prior_mean ? 'delta-up' : 'delta-down'">
-                {{ (insight.prior_mean * 100).toFixed(0) }}%
-                &rarr;
-                {{ (insight.posterior_mean * 100).toFixed(0) }}%
-              </div>
-            </div>
-            <div class="insight-bar-row">
-              <div class="insight-bar-bg">
-                <div class="insight-bar-prior" :style="{ width: (insight.prior_mean * 100) + '%' }"></div>
-                <div class="insight-bar-post" :style="{ width: (insight.posterior_mean * 100) + '%' }"></div>
-              </div>
-            </div>
-            <div class="insight-stats text-secondary">
-              {{ insight.successes + insight.failures }} Beobachtungen
-              ({{ insight.successes }} Erfolge, {{ insight.failures }} Misserfolge)
-            </div>
-            <p class="insight-text">{{ insight.interpretation }}</p>
-          </div>
-        </div>
-      </section>
-
-      <!-- 5 Example Cases with Pipeline Breakdown -->
-      <section class="card fade-in mt-2" v-if="exampleCases.length">
-        <h2>5 Beispielfälle — Pipeline v3 Analyse</h2>
-        <p class="text-secondary mb-2">Repräsentative Fälle mit vollständiger dreistufiger Wahrscheinlichkeitsanalyse.</p>
-        <div class="example-cases-grid">
-          <div v-for="c in exampleCases" :key="c.id" class="example-case-card">
-            <div class="ec-header">
-              <span class="ec-title">{{ c.title }}</span>
-              <span :class="['badge', c.outcome_success ? 'badge-completed' : 'badge-rejected']">
-                {{ c.outcome_success ? t('stats.successful') : t('stats.unsuccessful') }}
-              </span>
-            </div>
-            <div class="ec-amount">{{ c.claim_amount?.toFixed(0) }} {{ c.claim_currency || 'EUR' }}</div>
-            <div class="ec-pipeline" v-if="c.pipeline">
-              <div class="ec-prob-row">
-                <span class="ec-prob-label">p<sub>recht</sub></span>
-                <div class="ec-prob-bar-bg">
-                  <div class="ec-prob-bar tier-recht-bg" :style="{ width: (c.pipeline.p_recht * 100) + '%' }"></div>
-                </div>
-                <span class="ec-prob-val">{{ (c.pipeline.p_recht * 100).toFixed(0) }}%</span>
-              </div>
-              <div class="ec-prob-row">
-                <span class="ec-prob-label">p<sub>beweis</sub></span>
-                <div class="ec-prob-bar-bg">
-                  <div class="ec-prob-bar tier-beweis-bg" :style="{ width: (c.pipeline.p_beweis * 100) + '%' }"></div>
-                </div>
-                <span class="ec-prob-val">{{ (c.pipeline.p_beweis * 100).toFixed(0) }}%</span>
-              </div>
-              <div class="ec-prob-row">
-                <span class="ec-prob-label">p<sub>obsiegen</sub></span>
-                <div class="ec-prob-bar-bg">
-                  <div class="ec-prob-bar tier-obsiegen-bg" :style="{ width: (c.pipeline.p_obsiegen * 100) + '%' }"></div>
-                </div>
-                <span class="ec-prob-val">{{ (c.pipeline.p_obsiegen * 100).toFixed(0) }}%</span>
-              </div>
-              <div class="ec-prob-row" v-if="c.pipeline.p_eintreibung != null">
-                <span class="ec-prob-label">p<sub>eintreib.</sub></span>
-                <div class="ec-prob-bar-bg">
-                  <div class="ec-prob-bar tier-eintreib-bg" :style="{ width: (c.pipeline.p_eintreibung * 100) + '%' }"></div>
-                </div>
-                <span class="ec-prob-val">{{ (c.pipeline.p_eintreibung * 100).toFixed(0) }}%</span>
-              </div>
-              <div class="ec-prob-row" v-if="c.pipeline.p_gesamt != null">
-                <span class="ec-prob-label"><strong>p<sub>gesamt</sub></strong></span>
-                <div class="ec-prob-bar-bg">
-                  <div class="ec-prob-bar tier-gesamt-bg" :style="{ width: (c.pipeline.p_gesamt * 100) + '%' }"></div>
-                </div>
-                <span class="ec-prob-val"><strong>{{ (c.pipeline.p_gesamt * 100).toFixed(0) }}%</strong></span>
-              </div>
-              <div class="ec-ev-row">
-                <span>EV<sub>Betreiber</sub>:</span>
-                <span :class="c.pipeline.ev_betreiber >= 0 ? 'success' : 'danger'">
-                  {{ c.pipeline.ev_betreiber?.toFixed(0) ?? '—' }} EUR
-                </span>
-                <span v-if="c.pipeline.take_case != null" :class="['badge', c.pipeline.take_case ? 'badge-completed' : 'badge-rejected']" style="margin-left: 8px;">
-                  {{ c.pipeline.take_case ? 'Annahme' : 'Ablehnung' }}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Historical Cases Summary -->
-      <section class="card fade-in mt-2" v-if="histCases.length">
-        <h2>{{ t('stats.recentCases') }} ({{ histCases.length }} historische Fälle)</h2>
-        <p class="text-secondary mb-2">Zusammenfassung der historischen Fälle mit Pipeline v3 Scores.</p>
-        <div class="hist-summary">
-          <div class="hist-stat">
-            <span class="hist-number">{{ histCases.length }}</span>
-            <span class="hist-label">Fälle gesamt</span>
-          </div>
-          <div class="hist-stat">
-            <span class="hist-number success">{{ histCases.filter(c => c.outcome_success).length }}</span>
-            <span class="hist-label">Erfolgreich</span>
-          </div>
-          <div class="hist-stat">
-            <span class="hist-number danger">{{ histCases.filter(c => !c.outcome_success).length }}</span>
-            <span class="hist-label">Nicht erfolgreich</span>
-          </div>
-          <div class="hist-stat">
-            <span class="hist-number">{{ histCases.length > 0 ? (histCases.filter(c => c.outcome_success).length / histCases.length * 100).toFixed(0) + '%' : '-' }}</span>
-            <span class="hist-label">Erfolgsrate</span>
+      <!-- Filter + Search for Cases Table -->
+      <section class="card fade-in mt-3">
+        <div class="section-header">
+          <h2>Alle Fälle ({{ filteredCases.length }})</h2>
+          <div class="filter-row">
+            <input type="text" v-model="searchTerm" placeholder="Suche..." class="search-input" />
+            <select v-model="outcomeFilter" class="filter-select">
+              <option value="">Alle Ergebnisse</option>
+              <option value="won">Gewonnen</option>
+              <option value="lost">Verloren</option>
+              <option value="settled">Verglichen</option>
+              <option value="withdrawn">Zurückgezogen</option>
+            </select>
+            <select v-model="sortField" class="filter-select">
+              <option value="title">Nach Titel</option>
+              <option value="p_obsiegen">Nach p_obsiegen</option>
+              <option value="p_recht">Nach p_recht</option>
+              <option value="p_beweis">Nach p_beweis</option>
+              <option value="amount">Nach Betrag</option>
+              <option value="ev">Nach EV</option>
+            </select>
           </div>
         </div>
 
-        <!-- Pipeline distribution for historical cases -->
-        <div class="hist-pipeline-dist mt-2" v-if="histPipelineCases.length">
-          <h3>Pipeline-Verteilung (historisch)</h3>
-          <table class="data-table">
+        <!-- Cases Table -->
+        <div class="cases-table-wrap">
+          <table class="data-table cases-table">
             <thead>
               <tr>
-                <th>Metrik</th>
-                <th>Min</th>
-                <th>Ø Mittelwert</th>
-                <th>Max</th>
+                <th>#</th>
+                <th>Fall</th>
+                <th>Land</th>
+                <th>Betrag</th>
+                <th>p<sub>recht</sub></th>
+                <th>p<sub>beweis</sub></th>
+                <th>p<sub>obsiegen</sub></th>
+                <th>EV</th>
+                <th>Ergebnis</th>
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td>p<sub>recht</sub></td>
-                <td>{{ histPipelineMin('p_recht') }}%</td>
-                <td><strong>{{ histPipelineAvg('p_recht') }}%</strong></td>
-                <td>{{ histPipelineMax('p_recht') }}%</td>
-              </tr>
-              <tr>
-                <td>p<sub>beweis</sub></td>
-                <td>{{ histPipelineMin('p_beweis') }}%</td>
-                <td><strong>{{ histPipelineAvg('p_beweis') }}%</strong></td>
-                <td>{{ histPipelineMax('p_beweis') }}%</td>
-              </tr>
-              <tr>
-                <td>p<sub>obsiegen</sub></td>
-                <td>{{ histPipelineMin('p_obsiegen') }}%</td>
-                <td><strong>{{ histPipelineAvg('p_obsiegen') }}%</strong></td>
-                <td>{{ histPipelineMax('p_obsiegen') }}%</td>
-              </tr>
-              <tr>
-                <td>p<sub>eintreibung</sub></td>
-                <td>{{ histPipelineMin('p_eintreibung') }}%</td>
-                <td><strong>{{ histPipelineAvg('p_eintreibung') }}%</strong></td>
-                <td>{{ histPipelineMax('p_eintreibung') }}%</td>
-              </tr>
-              <tr>
-                <td>EV<sub>Betreiber</sub></td>
-                <td>{{ histEvMin() }} EUR</td>
-                <td><strong>{{ histEvAvg() }} EUR</strong></td>
-                <td>{{ histEvMax() }} EUR</td>
+              <tr v-for="(c, idx) in paginatedCases" :key="c.id"
+                  class="case-row clickable"
+                  :class="{ 'row-success': c.outcome_success, 'row-fail': !c.outcome_success, 'row-test': c.is_test, 'row-real': !c.is_seed }"
+                  @click="openDetail(c)">
+                <td>{{ (currentPage - 1) * pageSize + idx + 1 }}</td>
+                <td class="case-title-cell">
+                  <span v-if="c.is_test" class="badge badge-test">TEST</span>
+                  <span v-else-if="!c.is_seed" class="badge badge-real">ECHT</span>
+                  {{ c.title }}
+                </td>
+                <td>{{ c.claimant_country }} → {{ c.defendant_country }}</td>
+                <td>{{ c.claim_amount?.toFixed(0) ?? '—' }} EUR</td>
+                <td>
+                  <span class="prob-pill" :class="probClass(c.pipeline?.p_recht)">
+                    {{ c.pipeline ? (c.pipeline.p_recht * 100).toFixed(0) + '%' : '—' }}
+                  </span>
+                </td>
+                <td>
+                  <span class="prob-pill" :class="probClass(c.pipeline?.p_beweis)">
+                    {{ c.pipeline ? (c.pipeline.p_beweis * 100).toFixed(0) + '%' : '—' }}
+                  </span>
+                </td>
+                <td>
+                  <span class="prob-pill" :class="probClass(c.pipeline?.p_obsiegen)">
+                    {{ c.pipeline ? (c.pipeline.p_obsiegen * 100).toFixed(0) + '%' : '—' }}
+                  </span>
+                </td>
+                <td :class="c.pipeline?.ev_betreiber >= 0 ? 'success' : 'danger'">
+                  {{ c.pipeline?.ev_betreiber != null ? c.pipeline.ev_betreiber.toFixed(0) : '—' }}
+                </td>
+                <td>
+                  <span class="outcome-badge" :class="'outcome-' + c.outcome">
+                    {{ outcomeLabel(c.outcome) }}
+                  </span>
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
+
+        <!-- Pagination -->
+        <div class="pagination" v-if="totalPages > 1">
+          <button @click="currentPage = 1" :disabled="currentPage === 1">&laquo;</button>
+          <button @click="currentPage--" :disabled="currentPage === 1">&lsaquo;</button>
+          <span class="page-info">Seite {{ currentPage }} von {{ totalPages }}</span>
+          <button @click="currentPage++" :disabled="currentPage === totalPages">&rsaquo;</button>
+          <button @click="currentPage = totalPages" :disabled="currentPage === totalPages">&raquo;</button>
+        </div>
       </section>
 
-      <!-- Fallback if no data -->
-      <section class="card fade-in mt-2" v-if="!exampleCases.length && !histCases.length">
-        <h2>{{ t('stats.recentCases') }}</h2>
-        <table class="data-table">
-          <tbody>
-            <tr>
-              <td colspan="5" class="text-center text-secondary">{{ t('stats.noCompleted') }}</td>
-            </tr>
-          </tbody>
-        </table>
+      <!-- Test Case Form -->
+      <section class="card fade-in mt-3">
+        <h2>Neuen Testfall anlegen</h2>
+        <p class="text-secondary mb-2">
+          Erstellen Sie einen eigenen Testfall mit benutzerdefinierten Werten,
+          um zu prüfen, wie sich die Wahrscheinlichkeitsberechnung ändert.
+        </p>
+
+        <form @submit.prevent="submitTestCase" class="test-form">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Titel</label>
+              <input v-model="testForm.title" type="text" placeholder="z.B. Warenlieferung DE→AT" />
+            </div>
+            <div class="form-group">
+              <label>Klageart</label>
+              <select v-model="testForm.claim_type">
+                <option value="invoice">Rechnung / Warenlieferung</option>
+                <option value="werklohn">Werkvertrag / Dienstleistung</option>
+                <option value="refund">Rückforderung</option>
+                <option value="damages">Schadensersatz</option>
+                <option value="unjust_enrichment">Ungerechtfertigte Bereicherung</option>
+                <option value="other">Sonstige</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Kläger</label>
+              <input v-model="testForm.claimant_name" type="text" />
+            </div>
+            <div class="form-group">
+              <label>Kläger-Land</label>
+              <input v-model="testForm.claimant_country" type="text" maxlength="2" placeholder="DE" />
+            </div>
+            <div class="form-group">
+              <label>Beklagter</label>
+              <input v-model="testForm.defendant_name" type="text" />
+            </div>
+            <div class="form-group">
+              <label>Beklagter-Land</label>
+              <input v-model="testForm.defendant_country" type="text" maxlength="2" placeholder="DE" />
+            </div>
+            <div class="form-group">
+              <label>Gerichts-Land</label>
+              <input v-model="testForm.court_country" type="text" maxlength="2" placeholder="DE" />
+            </div>
+            <div class="form-group">
+              <label>Forderungsbetrag (EUR)</label>
+              <input v-model.number="testForm.claim_amount" type="number" min="0" max="5000" step="50" />
+            </div>
+            <div class="form-group span-2">
+              <label>Beschreibung</label>
+              <textarea v-model="testForm.description" rows="2" placeholder="Kurze Fallbeschreibung..."></textarea>
+            </div>
+            <div class="form-group span-2">
+              <label>Beweismittel</label>
+              <textarea v-model="testForm.evidence_desc" rows="2" placeholder="Welche Beweismittel liegen vor?"></textarea>
+            </div>
+
+            <div class="form-group">
+              <label>p<sub>recht</sub> (Schlüssigkeit)</label>
+              <div class="slider-group">
+                <input v-model.number="testForm.p_recht" type="range" min="0" max="1" step="0.05" />
+                <span class="slider-value" :class="probClass(testForm.p_recht)">{{ (testForm.p_recht * 100).toFixed(0) }}%</span>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>p<sub>beweis</sub> (Beweislage)</label>
+              <div class="slider-group">
+                <input v-model.number="testForm.p_beweis" type="range" min="0" max="1" step="0.05" />
+                <span class="slider-value" :class="probClass(testForm.p_beweis)">{{ (testForm.p_beweis * 100).toFixed(0) }}%</span>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>p<sub>eintreibung</sub> (Beitreibbarkeit)</label>
+              <div class="slider-group">
+                <input v-model.number="testForm.p_eintreibung" type="range" min="0" max="1" step="0.05" />
+                <span class="slider-value" :class="probClass(testForm.p_eintreibung)">{{ (testForm.p_eintreibung * 100).toFixed(0) }}%</span>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Ergebnis</label>
+              <select v-model="testForm.outcome">
+                <option value="won">Gewonnen</option>
+                <option value="lost">Verloren</option>
+                <option value="settled">Verglichen</option>
+                <option value="withdrawn">Zurückgezogen</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Live Preview -->
+          <div class="test-preview mt-2" v-if="testForm.p_recht != null">
+            <h3>Vorschau</h3>
+            <div class="preview-row">
+              <span>p<sub>obsiegen</sub> = {{ (testForm.p_recht * testForm.p_beweis * 100).toFixed(1) }}%</span>
+              <span>p<sub>gesamt</sub> = {{ (testForm.p_recht * testForm.p_beweis * testForm.p_eintreibung * 100).toFixed(1) }}%</span>
+              <span :class="previewEV >= 0 ? 'success' : 'danger'">EV = {{ previewEV.toFixed(0) }} EUR</span>
+              <span :class="testForm.p_recht * testForm.p_beweis >= 0.80 && previewEV > 0 ? 'success' : 'danger'">
+                {{ testForm.p_recht * testForm.p_beweis >= 0.80 && previewEV > 0 ? 'Annahme empfohlen' : 'Ablehnung' }}
+              </span>
+            </div>
+          </div>
+
+          <div class="form-actions mt-2">
+            <button type="submit" class="btn btn-primary" :disabled="submittingTest">
+              {{ submittingTest ? 'Wird erstellt...' : 'Testfall erstellen' }}
+            </button>
+          </div>
+
+          <div v-if="testResult" class="test-result mt-2">
+            <p class="success">Testfall erstellt! Die Statistik wird beim nächsten Laden aktualisiert.</p>
+            <button @click="loadStats" class="btn btn-secondary mt-1">Statistik neu laden</button>
+          </div>
+        </form>
       </section>
 
-      <!-- Seed Button (Admin) -->
-      <section class="card fade-in mt-2 mb-3" v-if="auth.user?.is_admin">
-        <h2>Admin: Seed-Daten</h2>
-        <p class="text-secondary mb-1">Generiert 5 fiktive Beispielfälle + 100 historische Fälle mit Pipeline v3 Scores.</p>
-        <div class="flex gap-1">
-          <button class="btn btn-primary" @click="seedData" :disabled="seeding">
-            {{ seeding ? 'Wird generiert...' : 'Seed-Daten generieren' }}
+      <!-- Admin Actions -->
+      <section class="card fade-in mt-3">
+        <h2>Administration</h2>
+        <div class="admin-actions">
+          <button @click="seedData" :disabled="seeding" class="btn btn-primary">
+            {{ seeding ? 'Seeding...' : '30 Testfälle neu generieren' }}
           </button>
-          <button class="btn btn-accent" @click="updatePriors" :disabled="updatingPriors">
-            {{ updatingPriors ? 'Wird aktualisiert...' : 'Priors aktualisieren' }}
+          <button @click="updatePriors" :disabled="updating" class="btn btn-secondary">
+            {{ updating ? 'Aktualisiere...' : 'Priors aktualisieren' }}
           </button>
         </div>
         <p v-if="seedMsg" class="mt-1 text-secondary">{{ seedMsg }}</p>
+        <p v-if="updateMsg" class="mt-1 text-secondary">{{ updateMsg }}</p>
       </section>
+
+      <!-- Detail Modal -->
+      <div v-if="selectedCase" class="modal-overlay" @click.self="selectedCase = null">
+        <div class="modal-content">
+          <button class="modal-close" @click="selectedCase = null">&times;</button>
+
+          <h2>{{ selectedCase.title }}</h2>
+
+          <div class="detail-grid">
+            <div class="detail-section">
+              <h3>Parteien</h3>
+              <div class="detail-row">
+                <span class="detail-label">Kläger:</span>
+                <span>{{ selectedCase.claimant_name }} ({{ selectedCase.claimant_country }})</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Beklagter:</span>
+                <span>{{ selectedCase.defendant_name }} ({{ selectedCase.defendant_country }})</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Gericht:</span>
+                <span>{{ selectedCase.court_country }}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Grenzüberschreitend:</span>
+                <span>{{ selectedCase.is_cross_border ? 'Ja' : 'Nein' }}</span>
+              </div>
+            </div>
+
+            <div class="detail-section">
+              <h3>Forderung</h3>
+              <div class="detail-row">
+                <span class="detail-label">Betrag:</span>
+                <span>{{ selectedCase.claim_amount?.toFixed(2) }} {{ selectedCase.claim_currency }}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Ergebnis:</span>
+                <span class="outcome-badge" :class="'outcome-' + selectedCase.outcome">
+                  {{ outcomeLabel(selectedCase.outcome) }}
+                </span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Netto-EV:</span>
+                <span :class="(selectedCase.net_ev || 0) >= 0 ? 'success' : 'danger'">
+                  {{ selectedCase.net_ev?.toFixed(2) ?? '—' }} EUR
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-section mt-2" v-if="selectedCase.description">
+            <h3>Beschreibung</h3>
+            <p>{{ selectedCase.description }}</p>
+          </div>
+
+          <div class="detail-section mt-2" v-if="selectedCase.evidence_desc">
+            <h3>Beweismittel</h3>
+            <p>{{ selectedCase.evidence_desc }}</p>
+          </div>
+
+          <div class="detail-section mt-2" v-if="selectedCase.assessment">
+            <h3>Bewertung</h3>
+            <p>{{ selectedCase.assessment }}</p>
+          </div>
+
+          <!-- Pipeline Scores in Detail -->
+          <div class="detail-section mt-2" v-if="selectedCase.pipeline">
+            <h3>Pipeline v3 — Wahrscheinlichkeiten</h3>
+            <div class="pipeline-flow pipeline-detail">
+              <div class="pipeline-tier">
+                <div class="tier-box tier-recht">
+                  <span class="tier-value">{{ (selectedCase.pipeline.p_recht * 100).toFixed(1) }}%</span>
+                  <span class="tier-name">p<sub>recht</sub></span>
+                </div>
+              </div>
+              <div class="pipeline-arrow">&times;</div>
+              <div class="pipeline-tier">
+                <div class="tier-box tier-beweis">
+                  <span class="tier-value">{{ (selectedCase.pipeline.p_beweis * 100).toFixed(1) }}%</span>
+                  <span class="tier-name">p<sub>beweis</sub></span>
+                </div>
+              </div>
+              <div class="pipeline-arrow">=</div>
+              <div class="pipeline-tier">
+                <div class="tier-box tier-obsiegen">
+                  <span class="tier-value">{{ (selectedCase.pipeline.p_obsiegen * 100).toFixed(1) }}%</span>
+                  <span class="tier-name">p<sub>obsiegen</sub></span>
+                </div>
+              </div>
+              <div class="pipeline-arrow">&times;</div>
+              <div class="pipeline-tier">
+                <div class="tier-box tier-eintreib">
+                  <span class="tier-value">{{ selectedCase.pipeline.p_eintreibung != null ? (selectedCase.pipeline.p_eintreibung * 100).toFixed(1) + '%' : '—' }}</span>
+                  <span class="tier-name">p<sub>eintreibung</sub></span>
+                </div>
+              </div>
+              <div class="pipeline-arrow">=</div>
+              <div class="pipeline-tier">
+                <div class="tier-box tier-gesamt">
+                  <span class="tier-value">{{ selectedCase.pipeline.p_gesamt != null ? (selectedCase.pipeline.p_gesamt * 100).toFixed(1) + '%' : '—' }}</span>
+                  <span class="tier-name">p<sub>gesamt</sub></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="pipeline-ev-row mt-2">
+              <div class="ev-card">
+                <span class="ev-label">EV<sub>Betreiber</sub></span>
+                <span class="ev-value" :class="(selectedCase.pipeline.ev_betreiber || 0) >= 0 ? 'success' : 'danger'">
+                  {{ selectedCase.pipeline.ev_betreiber?.toFixed(2) ?? '—' }} EUR
+                </span>
+              </div>
+              <div class="ev-card">
+                <span class="ev-label">Fallentscheidung</span>
+                <span class="ev-value" :class="selectedCase.pipeline.take_case ? 'success' : 'danger'">
+                  {{ selectedCase.pipeline.take_case ? 'Annahme empfohlen' : 'Ablehnung' }}
+                </span>
+              </div>
+            </div>
+
+            <!-- Element Scores -->
+            <div class="element-scores mt-2" v-if="Object.keys(selectedCase.pipeline.element_scores || {}).length">
+              <h4>Beweiselemente</h4>
+              <div class="element-bar-list">
+                <div class="element-bar-row" v-for="(val, key) in selectedCase.pipeline.element_scores" :key="key">
+                  <span class="element-label">{{ elementLabel(key) }}</span>
+                  <div class="element-bar-container">
+                    <div class="element-bar" :style="{ width: (val * 100) + '%' }" :class="probClass(val)"></div>
+                  </div>
+                  <span class="element-value">{{ (val * 100).toFixed(0) }}%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useAuthStore } from '../stores/auth'
-import { useI18nStore } from '../stores/i18n'
-import api from '../services/api'
+import { useI18n } from 'vue-i18n'
+import api from '@/api'
 
-const auth = useAuthStore()
-const { t } = useI18nStore()
+const { t } = useI18n()
 
+// State
 const stats = ref({})
-const posteriors = ref([])
-const exampleCases = ref([])
-const histCases = ref([])
-const learningInsights = ref([])
-const pipelineAgg = ref(null)
-const bayesSteps = ref([])
 const seeding = ref(false)
-const updatingPriors = ref(false)
+const updating = ref(false)
 const seedMsg = ref('')
+const updateMsg = ref('')
+const selectedCase = ref(null)
+const submittingTest = ref(false)
+const testResult = ref(null)
 
-const contractBasisSteps = computed(() => bayesSteps.value.filter(s => s.element === 'contract_basis'))
-const performanceSteps = computed(() => bayesSteps.value.filter(s => s.element === 'performance'))
-const maxStep = computed(() => {
-  if (!bayesSteps.value.length) return 1
-  return Math.max(...bayesSteps.value.map(s => s.step))
+// Filters
+const searchTerm = ref('')
+const outcomeFilter = ref('')
+const sortField = ref('title')
+const currentPage = ref(1)
+const pageSize = 20
+
+// Test form
+const testForm = ref({
+  title: '',
+  claim_type: 'invoice',
+  claimant_name: 'Testkläger GmbH',
+  claimant_country: 'DE',
+  defendant_name: 'Testbeklagter S.r.l.',
+  defendant_country: 'IT',
+  court_country: 'DE',
+  claim_amount: 2000,
+  description: '',
+  evidence_desc: '',
+  p_recht: 0.7,
+  p_beweis: 0.6,
+  p_eintreibung: 0.75,
+  outcome: 'won',
 })
 
-const histPipelineCases = computed(() => histCases.value.filter(c => c.pipeline))
+// Computed
+const allCases = computed(() => stats.value.completed_cases_detail || [])
+const pipelineAgg = computed(() => stats.value.pipeline_aggregates)
+const bayesSteps = computed(() => stats.value.bayes_learning_progression || [])
+const contractBasisSteps = computed(() => bayesSteps.value.filter(s => s.element === 'contract_basis'))
 
-function histPipelineMin(field) {
-  const vals = histPipelineCases.value.map(c => c.pipeline[field]).filter(v => v != null)
-  return vals.length ? (Math.min(...vals) * 100).toFixed(1) : '—'
+const filteredCases = computed(() => {
+  let cases = [...allCases.value]
+
+  // Search filter
+  if (searchTerm.value) {
+    const term = searchTerm.value.toLowerCase()
+    cases = cases.filter(c =>
+      (c.title || '').toLowerCase().includes(term) ||
+      (c.description || '').toLowerCase().includes(term) ||
+      (c.claimant_name || '').toLowerCase().includes(term) ||
+      (c.defendant_name || '').toLowerCase().includes(term) ||
+      (c.claimant_country || '').toLowerCase().includes(term) ||
+      (c.defendant_country || '').toLowerCase().includes(term)
+    )
+  }
+
+  // Outcome filter
+  if (outcomeFilter.value) {
+    cases = cases.filter(c => c.outcome === outcomeFilter.value)
+  }
+
+  // Sort
+  cases.sort((a, b) => {
+    switch (sortField.value) {
+      case 'p_obsiegen':
+        return (b.pipeline?.p_obsiegen || 0) - (a.pipeline?.p_obsiegen || 0)
+      case 'p_recht':
+        return (b.pipeline?.p_recht || 0) - (a.pipeline?.p_recht || 0)
+      case 'p_beweis':
+        return (b.pipeline?.p_beweis || 0) - (a.pipeline?.p_beweis || 0)
+      case 'amount':
+        return (b.claim_amount || 0) - (a.claim_amount || 0)
+      case 'ev':
+        return (b.pipeline?.ev_betreiber || -9999) - (a.pipeline?.ev_betreiber || -9999)
+      default:
+        return (a.title || '').localeCompare(b.title || '')
+    }
+  })
+
+  return cases
+})
+
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredCases.value.length / pageSize)))
+
+const paginatedCases = computed(() => {
+  const start = (currentPage.value - 1) * pageSize
+  return filteredCases.value.slice(start, start + pageSize)
+})
+
+const previewEV = computed(() => {
+  const pObs = testForm.value.p_recht * testForm.value.p_beweis
+  const costs = 35 + 75 + 50
+  const lossCosts = 200
+  if (pObs > 0) {
+    return pObs * 0.30 * testForm.value.claim_amount - costs - (1 - pObs) * lossCosts
+  }
+  return -(costs + lossCosts)
+})
+
+// Methods
+function probClass(val) {
+  if (val == null) return ''
+  if (val >= 0.7) return 'prob-high'
+  if (val >= 0.4) return 'prob-mid'
+  return 'prob-low'
 }
-function histPipelineMax(field) {
-  const vals = histPipelineCases.value.map(c => c.pipeline[field]).filter(v => v != null)
-  return vals.length ? (Math.max(...vals) * 100).toFixed(1) : '—'
+
+function outcomeLabel(outcome) {
+  const map = { won: 'Gewonnen', lost: 'Verloren', settled: 'Verglichen', withdrawn: 'Zurückgezogen' }
+  return map[outcome] || outcome || '—'
 }
-function histPipelineAvg(field) {
-  const vals = histPipelineCases.value.map(c => c.pipeline[field]).filter(v => v != null)
-  return vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length * 100).toFixed(1) : '—'
+
+function elementLabel(key) {
+  const map = {
+    contract_basis: 'Vertragsbasis',
+    performance: 'Leistung',
+    amount_due: 'Forderungshöhe',
+    non_payment: 'Nichtzahlung',
+  }
+  return map[key] || key
 }
-function histEvMin() {
-  const vals = histPipelineCases.value.map(c => c.pipeline.ev_betreiber).filter(v => v != null)
-  return vals.length ? Math.min(...vals).toFixed(0) : '—'
-}
-function histEvMax() {
-  const vals = histPipelineCases.value.map(c => c.pipeline.ev_betreiber).filter(v => v != null)
-  return vals.length ? Math.max(...vals).toFixed(0) : '—'
-}
-function histEvAvg() {
-  const vals = histPipelineCases.value.map(c => c.pipeline.ev_betreiber).filter(v => v != null)
-  return vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(0) : '—'
+
+function openDetail(c) {
+  selectedCase.value = c
 }
 
 async function loadStats() {
   try {
-    const { data } = await api.get('/statistics/overview')
-    stats.value = data
-    posteriors.value = data.posteriors || []
-    learningInsights.value = data.learning_insights || []
-    pipelineAgg.value = data.pipeline_aggregates || null
-    bayesSteps.value = data.bayes_learning_progression || []
-    const all = data.completed_cases_detail || []
-    exampleCases.value = all.filter(c => !c.title.startsWith('[HIST]'))
-    histCases.value = all.filter(c => c.title.startsWith('[HIST]'))
-  } catch {
-    // Stats endpoint may not exist yet
+    const res = await api.get('/api/statistics/overview')
+    stats.value = res.data
+    testResult.value = null
+  } catch (err) {
+    console.error('Failed to load statistics', err)
   }
 }
 
@@ -459,27 +646,43 @@ async function seedData() {
   seeding.value = true
   seedMsg.value = ''
   try {
-    const { data } = await api.post('/statistics/seed')
-    seedMsg.value = data.message || 'Seed-Daten generiert!'
+    const res = await api.post('/api/statistics/seed')
+    seedMsg.value = res.data.message
     await loadStats()
-  } catch (e) {
-    seedMsg.value = 'Fehler: ' + (e.response?.data?.detail || e.message)
+  } catch (err) {
+    seedMsg.value = 'Fehler: ' + (err.response?.data?.detail || err.message)
   } finally {
     seeding.value = false
   }
 }
 
 async function updatePriors() {
-  updatingPriors.value = true
-  seedMsg.value = ''
+  updating.value = true
+  updateMsg.value = ''
   try {
-    const { data } = await api.post('/statistics/update-priors')
-    seedMsg.value = data.message || 'Priors aktualisiert!'
+    const res = await api.post('/api/statistics/update-priors')
+    const items = res.data.priors || []
+    updateMsg.value = items.map(p => `${p.rate_name}: ${(p.posterior_mean * 100).toFixed(1)}%`).join(' | ')
     await loadStats()
-  } catch (e) {
-    seedMsg.value = 'Fehler: ' + (e.response?.data?.detail || e.message)
+  } catch (err) {
+    updateMsg.value = 'Fehler: ' + (err.response?.data?.detail || err.message)
   } finally {
-    updatingPriors.value = false
+    updating.value = false
+  }
+}
+
+async function submitTestCase() {
+  submittingTest.value = true
+  testResult.value = null
+  try {
+    const res = await api.post('/api/statistics/test-case', testForm.value)
+    testResult.value = res.data
+    await loadStats()
+  } catch (err) {
+    console.error('Failed to create test case', err)
+    testResult.value = { error: err.response?.data?.detail || err.message }
+  } finally {
+    submittingTest.value = false
   }
 }
 
@@ -487,448 +690,167 @@ onMounted(loadStats)
 </script>
 
 <style scoped>
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px;
-}
-
-.stat-card {
-  text-align: center;
-  padding: 24px 16px;
-}
-
-.stat-value {
-  font-size: 2rem;
-  font-weight: 800;
-  color: var(--primary);
-}
-
-.stat-value.success { color: var(--success); }
-
-.stat-label {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  margin-top: 4px;
-}
-
-/* Pipeline v3 Flow */
-.pipeline-flow {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding: 20px 0;
-}
-
-.pipeline-tier {
-  text-align: center;
-}
-
-.tier-label {
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 6px;
-}
-
-.tier-box {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 16px 20px;
-  border-radius: 12px;
-  min-width: 100px;
-}
-
-.tier-value {
-  font-size: 1.5rem;
-  font-weight: 800;
-  color: #fff;
-}
-
-.tier-name {
-  font-size: 0.78rem;
-  color: rgba(255, 255, 255, 0.85);
-  margin-top: 2px;
-}
-
-.tier-recht { background: linear-gradient(135deg, #1976d2, #1565c0); }
-.tier-beweis { background: linear-gradient(135deg, #388e3c, #2e7d32); }
-.tier-obsiegen { background: linear-gradient(135deg, #f57c00, #e65100); }
-.tier-eintreib { background: linear-gradient(135deg, #7b1fa2, #6a1b9a); }
-.tier-gesamt { background: linear-gradient(135deg, #c62828, #b71c1c); }
-
-.pipeline-arrow {
-  font-size: 1.5rem;
-  font-weight: 700;
-  color: var(--text-secondary);
-  padding: 0 4px;
-}
-
-.pipeline-ev-row {
-  display: flex;
-  justify-content: center;
-  gap: 32px;
-}
-
-.ev-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 12px 24px;
-  background: var(--bg-secondary, #fafafa);
-  border-radius: var(--radius);
-}
-
-.ev-label {
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-}
-
-.ev-value {
-  font-size: 1.3rem;
-  font-weight: 700;
-}
-
-/* Data Table */
-.data-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.data-table th,
-.data-table td {
-  padding: 10px 12px;
-  text-align: left;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.88rem;
-}
-
-.data-table th {
-  font-weight: 600;
-  color: var(--text-secondary);
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.prob-bar-container {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.prob-bar {
-  height: 8px;
-  background: var(--primary);
-  border-radius: 4px;
-  min-width: 4px;
-  max-width: 120px;
-  transition: width 0.3s;
-}
-
-.prob-bar-label {
-  font-weight: 600;
-  font-size: 0.85rem;
-  white-space: nowrap;
-}
-
-.success { color: var(--success); font-weight: 600; }
-.danger { color: var(--danger); font-weight: 600; }
-
-/* Bayes Learning Chart */
-.learning-chart {
-  padding: 16px 0;
-}
-
-.chart-header {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 8px;
-}
-
-.chart-legend {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-}
-
-.legend-dot {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-  margin-right: 4px;
-}
-
-.legend-cb { background: #1976d2; }
-.legend-pf { background: #388e3c; }
-
-.chart-area {
-  display: flex;
-  height: 200px;
-  border-left: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  position: relative;
-}
-
-.chart-y-axis {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  padding-right: 8px;
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-  width: 36px;
-  text-align: right;
-}
-
-.chart-bars {
-  position: relative;
-  flex: 1;
-  overflow: hidden;
-}
-
-.chart-bar-group {
-  position: absolute;
-  bottom: 0;
-}
-
-.chart-bar {
-  width: 6px;
-  border-radius: 3px 3px 0 0;
-  transition: height 0.3s;
-}
-
-.bar-cb { background: #1976d2; }
-.bar-pf { background: #388e3c; }
-
-.chart-x-label {
-  text-align: center;
-  font-size: 0.78rem;
-  color: var(--text-secondary);
-  margin-top: 8px;
-}
-
-/* Learning Insights */
-.insights-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.insight-card {
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-secondary, #fafafa);
-}
-
-.insight-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-}
-
-.insight-delta {
-  font-weight: 700;
-  font-size: 0.95rem;
-}
-
-.delta-up { color: var(--success); }
-.delta-down { color: var(--danger); }
-
-.insight-bar-row {
-  margin-bottom: 8px;
-}
-
-.insight-bar-bg {
-  position: relative;
-  height: 12px;
-  background: #e0e0e0;
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.insight-bar-prior {
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
-  background: rgba(var(--primary-rgb, 25, 118, 210), 0.25);
-  border-radius: 6px;
-}
-
-.insight-bar-post {
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
-  background: var(--primary);
-  border-radius: 6px;
-  opacity: 0.8;
-}
-
-.insight-stats {
-  font-size: 0.82rem;
-  margin-bottom: 6px;
-}
-
-.insight-text {
-  font-size: 0.85rem;
-  color: var(--text-primary);
-  margin: 0;
-}
-
-/* Example Cases Grid */
-.example-cases-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 16px;
-}
-
-.example-case-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 16px;
-  background: var(--bg-secondary, #fafafa);
-}
-
-.ec-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.ec-title {
-  font-size: 0.85rem;
-  font-weight: 600;
-  line-height: 1.3;
-}
-
-.ec-amount {
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: var(--primary);
-  margin-bottom: 12px;
-}
-
-.ec-pipeline {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.ec-prob-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.ec-prob-label {
-  font-size: 0.78rem;
-  color: var(--text-secondary);
-  min-width: 70px;
-  text-align: right;
-}
-
-.ec-prob-bar-bg {
-  flex: 1;
-  height: 8px;
-  background: #e0e0e0;
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.ec-prob-bar {
-  height: 100%;
-  border-radius: 4px;
-  transition: width 0.3s;
-}
-
-.tier-recht-bg { background: #1976d2; }
-.tier-beweis-bg { background: #388e3c; }
-.tier-obsiegen-bg { background: #f57c00; }
-.tier-eintreib-bg { background: #7b1fa2; }
-.tier-gesamt-bg { background: #c62828; }
-
-.ec-prob-val {
-  font-size: 0.82rem;
-  font-weight: 600;
-  min-width: 40px;
-}
-
-.ec-ev-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  margin-top: 4px;
-  font-size: 0.85rem;
-}
-
-/* Historical Summary */
-.hist-summary {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 16px;
-}
-
-.hist-stat {
-  text-align: center;
-  padding: 16px;
-  background: var(--bg-secondary, #fafafa);
-  border-radius: var(--radius);
-}
-
-.hist-number {
-  display: block;
-  font-size: 1.8rem;
-  font-weight: 800;
-  color: var(--primary);
-}
-
-.hist-number.success { color: var(--success); }
-.hist-number.danger { color: var(--danger); }
-
-.hist-label {
-  display: block;
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-  margin-top: 4px;
-}
-
-.hist-pipeline-dist h3 {
-  font-size: 1rem;
-  margin-bottom: 8px;
-}
+.page { padding: 2rem 0; }
+.container { max-width: 1200px; margin: 0 auto; padding: 0 1.5rem; }
+.mb-2 { margin-bottom: 1rem; }
+.mt-1 { margin-top: 0.5rem; }
+.mt-2 { margin-top: 1rem; }
+.mt-3 { margin-top: 1.5rem; }
+.fade-in { animation: fadeIn 0.3s ease-in; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+.card { background: var(--color-bg-card, #fff); border: 1px solid var(--color-border, #e2e8f0); border-radius: 12px; padding: 1.5rem; }
+.text-secondary { color: var(--color-text-secondary, #64748b); font-size: 0.9rem; }
+.font-semibold { font-weight: 600; }
+.success { color: #16a34a; }
+.danger { color: #dc2626; }
+
+/* Stats grid */
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
+.stat-card { text-align: center; }
+.stat-value { font-size: 2rem; font-weight: 700; }
+.stat-label { font-size: 0.85rem; color: var(--color-text-secondary, #64748b); margin-top: 0.25rem; }
+
+/* Pipeline flow */
+.pipeline-flow { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; justify-content: center; padding: 1rem 0; }
+.pipeline-tier { text-align: center; }
+.tier-label { font-size: 0.75rem; color: var(--color-text-secondary, #64748b); margin-bottom: 0.25rem; }
+.tier-box { padding: 0.75rem 1rem; border-radius: 8px; min-width: 90px; }
+.tier-value { font-size: 1.25rem; font-weight: 700; display: block; }
+.tier-name { font-size: 0.75rem; opacity: 0.8; }
+.tier-recht { background: #dbeafe; color: #1d4ed8; }
+.tier-beweis { background: #fef3c7; color: #92400e; }
+.tier-obsiegen { background: #d1fae5; color: #065f46; }
+.tier-eintreib { background: #ede9fe; color: #5b21b6; }
+.tier-gesamt { background: #f3e8ff; color: #7c3aed; }
+.pipeline-arrow { font-size: 1.25rem; font-weight: 700; color: var(--color-text-secondary, #64748b); }
+.pipeline-detail .tier-box { min-width: 70px; padding: 0.5rem 0.75rem; }
+.pipeline-detail .tier-value { font-size: 1rem; }
+
+.pipeline-ev-row { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+.ev-card { display: flex; align-items: center; gap: 0.5rem; }
+.ev-label { font-size: 0.85rem; color: var(--color-text-secondary, #64748b); }
+.ev-value { font-weight: 700; font-size: 1.1rem; }
+
+/* Data tables */
+.data-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.data-table th, .data-table td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid var(--color-border, #e2e8f0); }
+.data-table th { font-weight: 600; color: var(--color-text-secondary, #64748b); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+
+/* Cases table */
+.cases-table-wrap { overflow-x: auto; }
+.cases-table { min-width: 900px; }
+.case-row.clickable { cursor: pointer; transition: background 0.15s; }
+.case-row.clickable:hover { background: var(--color-bg-hover, #f1f5f9); }
+.case-title-cell { max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-test { border-left: 3px solid #a855f7; }
+.row-real { border-left: 3px solid #3b82f6; }
 
 /* Badges */
-.badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
+.badge { font-size: 0.65rem; padding: 0.15rem 0.4rem; border-radius: 4px; font-weight: 700; margin-right: 0.25rem; text-transform: uppercase; }
+.badge-test { background: #f3e8ff; color: #7c3aed; }
+.badge-real { background: #dbeafe; color: #2563eb; }
 
-.badge-completed {
-  background: rgba(56, 142, 60, 0.12);
-  color: #2e7d32;
-}
+/* Probability pills */
+.prob-pill { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 12px; font-weight: 600; font-size: 0.85rem; }
+.prob-high { background: #dcfce7; color: #166534; }
+.prob-mid { background: #fef3c7; color: #92400e; }
+.prob-low { background: #fecaca; color: #991b1b; }
 
-.badge-rejected {
-  background: rgba(198, 40, 40, 0.12);
-  color: #c62828;
+/* Outcome badges */
+.outcome-badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 12px; font-size: 0.8rem; font-weight: 600; }
+.outcome-won { background: #dcfce7; color: #166534; }
+.outcome-lost { background: #fecaca; color: #991b1b; }
+.outcome-settled { background: #fef3c7; color: #92400e; }
+.outcome-withdrawn { background: #e2e8f0; color: #475569; }
+
+/* Pagination */
+.pagination { display: flex; align-items: center; justify-content: center; gap: 0.5rem; margin-top: 1rem; }
+.pagination button { padding: 0.4rem 0.8rem; border: 1px solid var(--color-border, #e2e8f0); border-radius: 6px; background: var(--color-bg-card, #fff); cursor: pointer; }
+.pagination button:disabled { opacity: 0.4; cursor: default; }
+.page-info { font-size: 0.85rem; color: var(--color-text-secondary, #64748b); }
+
+/* Filter row */
+.section-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; }
+.filter-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.search-input { padding: 0.4rem 0.75rem; border: 1px solid var(--color-border, #e2e8f0); border-radius: 6px; font-size: 0.9rem; min-width: 180px; }
+.filter-select { padding: 0.4rem 0.75rem; border: 1px solid var(--color-border, #e2e8f0); border-radius: 6px; font-size: 0.85rem; }
+
+/* Test form */
+.test-form { max-width: 800px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.form-group { display: flex; flex-direction: column; gap: 0.25rem; }
+.form-group.span-2 { grid-column: span 2; }
+.form-group label { font-size: 0.85rem; font-weight: 600; color: var(--color-text-secondary, #64748b); }
+.form-group input, .form-group select, .form-group textarea {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+.slider-group { display: flex; align-items: center; gap: 0.75rem; }
+.slider-group input[type="range"] { flex: 1; }
+.slider-value { font-weight: 700; min-width: 3rem; text-align: center; padding: 0.15rem 0.5rem; border-radius: 8px; }
+
+.test-preview { background: var(--color-bg-hover, #f8fafc); padding: 1rem; border-radius: 8px; border: 1px solid var(--color-border, #e2e8f0); }
+.test-preview h3 { font-size: 0.9rem; margin-bottom: 0.5rem; }
+.preview-row { display: flex; gap: 1.5rem; flex-wrap: wrap; font-weight: 600; }
+.test-result { padding: 0.75rem; background: #f0fdf4; border: 1px solid #86efac; border-radius: 8px; }
+
+.form-actions { display: flex; gap: 0.75rem; }
+
+/* Buttons */
+.btn { padding: 0.6rem 1.2rem; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.9rem; transition: opacity 0.15s; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: #2563eb; color: #fff; }
+.btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+.btn-secondary { background: #e2e8f0; color: #334155; }
+.btn-secondary:hover:not(:disabled) { background: #cbd5e1; }
+
+.admin-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+
+/* Bayes chart */
+.bayes-chart { padding: 0.5rem 0; }
+.bayes-chart-header { display: flex; gap: 1.5rem; margin-bottom: 0.75rem; }
+.chart-legend-item { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.dot-cb { background: #3b82f6; }
+.dot-pf { background: #10b981; }
+.bayes-bars { display: flex; flex-direction: column; gap: 0.35rem; }
+.bayes-bar-group { display: flex; align-items: center; gap: 0.5rem; }
+.bar-label { min-width: 55px; font-size: 0.8rem; color: var(--color-text-secondary, #64748b); text-align: right; }
+.bar-container { flex: 1; height: 22px; background: var(--color-bg-hover, #f1f5f9); border-radius: 4px; overflow: hidden; }
+.bar { height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 0.4rem; font-size: 0.75rem; font-weight: 600; color: #fff; min-width: 30px; transition: width 0.3s; }
+.bar-cb { background: #3b82f6; }
+
+/* Modal */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 1rem; }
+.modal-content { background: var(--color-bg-card, #fff); border-radius: 12px; padding: 2rem; max-width: 800px; width: 100%; max-height: 90vh; overflow-y: auto; position: relative; }
+.modal-close { position: absolute; top: 0.75rem; right: 1rem; background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--color-text-secondary, #64748b); }
+.modal-close:hover { color: #000; }
+
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 1rem; }
+.detail-section h3 { font-size: 1rem; margin-bottom: 0.5rem; color: var(--color-text-secondary, #64748b); }
+.detail-section h4 { font-size: 0.9rem; margin-bottom: 0.5rem; color: var(--color-text-secondary, #64748b); }
+.detail-row { display: flex; gap: 0.5rem; margin-bottom: 0.35rem; font-size: 0.9rem; }
+.detail-label { font-weight: 600; min-width: 120px; color: var(--color-text-secondary, #64748b); }
+
+/* Element scores */
+.element-bar-list { display: flex; flex-direction: column; gap: 0.4rem; }
+.element-bar-row { display: flex; align-items: center; gap: 0.5rem; }
+.element-label { min-width: 110px; font-size: 0.85rem; }
+.element-bar-container { flex: 1; height: 18px; background: var(--color-bg-hover, #f1f5f9); border-radius: 4px; overflow: hidden; }
+.element-bar { height: 100%; border-radius: 4px; transition: width 0.3s; }
+.element-bar.prob-high { background: #22c55e; }
+.element-bar.prob-mid { background: #f59e0b; }
+.element-bar.prob-low { background: #ef4444; }
+.element-value { min-width: 35px; font-size: 0.85rem; font-weight: 600; text-align: right; }
+
+@media (max-width: 768px) {
+  .form-grid { grid-template-columns: 1fr; }
+  .form-group.span-2 { grid-column: span 1; }
+  .detail-grid { grid-template-columns: 1fr; }
+  .pipeline-flow { gap: 0.4rem; }
+  .tier-box { min-width: 65px; padding: 0.5rem; }
 }
 </style>
