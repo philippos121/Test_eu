@@ -42,9 +42,9 @@
             </div>
           </div>
 
-          <!-- 5 Teilwahrscheinlichkeiten -->
+          <!-- 3 v3-Säulen -->
           <div class="card fade-in mt-2">
-            <h3 class="section-title">Teilwahrscheinlichkeiten</h3>
+            <h3 class="section-title">Drei Bewertungssäulen (v3)</h3>
             <div class="prob-bars">
               <div v-for="p in probItems" :key="p.key" class="prob-row">
                 <div class="prob-label">{{ p.label }}</div>
@@ -54,9 +54,46 @@
                 <div class="prob-value" :class="probClass(p.value)">{{ (p.value * 100).toFixed(1) }}%</div>
               </div>
             </div>
+            <p class="formula-note">p(cash) = p(Anspruch gültig) × p(Anspruch beweisbar) × p(Zahlung)</p>
           </div>
 
-          <!-- Evidence / Ability / Willingness -->
+          <!-- Rechtsgültigkeit-Breakdown (v3) -->
+          <div v-if="score.legal_validity_json" class="card fade-in mt-2">
+            <h3 class="section-title">Rechtliche Gültigkeitsprüfung (LLM + Statistik)</h3>
+            <div class="breakdown-list">
+              <div class="breakdown-item">
+                <span>Anspruch entstanden</span>
+                <span :class="['breakdown-val', probClass(score.legal_validity_json.p_entstanden)]">
+                  {{ ((score.legal_validity_json.p_entstanden || 0) * 100).toFixed(0) }}%
+                </span>
+              </div>
+              <div class="breakdown-item">
+                <span>Anspruch nicht erloschen</span>
+                <span :class="['breakdown-val', probClass(score.legal_validity_json.p_not_untergegangen)]">
+                  {{ ((score.legal_validity_json.p_not_untergegangen || 0) * 100).toFixed(0) }}%
+                </span>
+              </div>
+              <div class="breakdown-item">
+                <span>Anspruch durchsetzbar</span>
+                <span :class="['breakdown-val', probClass(score.legal_validity_json.p_durchsetzbar)]">
+                  {{ ((score.legal_validity_json.p_durchsetzbar || 0) * 100).toFixed(0) }}%
+                </span>
+              </div>
+              <div v-if="score.legal_validity_json.applicable_law" class="breakdown-item">
+                <span>Anwendbares Recht</span>
+                <span class="breakdown-val text-secondary" style="font-size:0.78rem">{{ score.legal_validity_json.applicable_law }}</span>
+              </div>
+            </div>
+            <div v-if="score.legal_validity_json.key_legal_issues?.length" class="missing-list mt-1">
+              <strong>Rechtliche Kernfragen:</strong>
+              <span v-for="issue in score.legal_validity_json.key_legal_issues" :key="issue" class="missing-tag" style="background:#fff3e0;color:#e65100">{{ issue }}</span>
+            </div>
+            <div v-if="score.legal_validity_json.searches_performed?.length" class="trace-meta text-secondary mt-1">
+              Web-Suchen: {{ score.legal_validity_json.searches_performed.join(' · ') }}
+            </div>
+          </div>
+
+          <!-- Beweis-Score + Zahlungsfähigkeit + Zahlungswilligkeit -->
           <div class="score-grid mt-2">
             <div class="card fade-in">
               <h3 class="section-title">Beweis-Score</h3>
@@ -74,19 +111,24 @@
             </div>
 
             <div class="card fade-in">
-              <h3 class="section-title">Zahlungsfähigkeit (Ability)</h3>
-              <div class="big-score" :class="scoreClass(score.ability_score)">{{ score.ability_score.toFixed(0) }}<span class="score-max">/100</span></div>
+              <h3 class="section-title">Zahlungsfähigkeit (LLM)</h3>
+              <div class="big-score" :class="scoreClass(abilityScore)">{{ abilityScore.toFixed(0) }}<span class="score-max">/100</span></div>
               <div class="breakdown-list">
-                <div class="breakdown-item" v-for="(val, key) in abilityItems" :key="key">
-                  <span>{{ abilityLabels[key] || key }}</span>
-                  <span :class="['breakdown-val', flagClass(key, val)]">{{ formatFlag(val) }}</span>
+                <div v-if="paymentJson.insolvency_risk" class="breakdown-item">
+                  <span>Insolvenzrisiko</span>
+                  <span :class="['breakdown-val', insolvencyClass(paymentJson.insolvency_risk)]">{{ paymentJson.insolvency_risk }}</span>
+                </div>
+                <div v-if="paymentJson.ability_searches?.length" class="breakdown-item">
+                  <span>Web-Suchen</span>
+                  <span class="breakdown-val text-secondary" style="font-size:0.75rem">{{ paymentJson.ability_searches.length }} Abfrage(n)</span>
                 </div>
               </div>
+              <div v-if="paymentJson.ability_reasoning" class="trace-meta text-secondary mt-1">{{ paymentJson.ability_reasoning }}</div>
             </div>
 
             <div class="card fade-in">
-              <h3 class="section-title">Zahlungswilligkeit (Willingness)</h3>
-              <div class="big-score" :class="scoreClass(score.willingness_score)">{{ score.willingness_score.toFixed(0) }}<span class="score-max">/100</span></div>
+              <h3 class="section-title">Zahlungswilligkeit (Verhalten)</h3>
+              <div class="big-score" :class="scoreClass(willingnessScore)">{{ willingnessScore.toFixed(0) }}<span class="score-max">/100</span></div>
               <div class="breakdown-list">
                 <div class="breakdown-item" v-for="(val, key) in willingnessItems" :key="key">
                   <span>{{ willingnessLabels[key] || key }}</span>
@@ -217,32 +259,42 @@ const STATUS_LABELS = {
 }
 function statusLabel(s) { return STATUS_LABELS[s] || s }
 
+// v3 three-pillar probabilities
 const probItems = computed(() => {
   if (!score.value) return []
   return [
-    { key: 'p_served', label: 'Zustellung (p_served)', value: score.value.p_served },
-    { key: 'p_default', label: 'Versäumnis (p_default)', value: score.value.p_default },
-    { key: 'p_win_contested', label: 'Gewinn b. Bestreitung (p_win_contested)', value: score.value.p_win_contested },
-    { key: 'p_settle', label: 'Vergleich (p_settle)', value: score.value.p_settle },
-    { key: 'p_collect', label: 'Inkasso (p_collect)', value: score.value.p_collect },
+    { key: 'p_claim_valid',    label: 'Anspruch rechtlich gültig',  value: score.value.p_claim_valid    ?? 0 },
+    { key: 'p_claim_provable', label: 'Anspruch beweisbar',         value: score.value.p_claim_provable ?? 0 },
+    { key: 'p_payment',        label: 'Zahlung tatsächlich erfolgt', value: score.value.p_payment        ?? 0 },
   ]
 })
 
 const evidenceLabels = { contract: 'Vertrag/Auftrag', delivery: 'Liefernachweis', invoice: 'Rechnung/Fälligkeit', dunning: 'Mahnung' }
 const evidenceBreakdown = computed(() => {
   if (!score.value) return {}
-  const { missing, ...rest } = score.value.evidence_breakdown
+  const { missing, ...rest } = score.value.evidence_breakdown || {}
   return rest
 })
 
-const abilityLabels = { base: 'Basis', insolvency_flag: 'Insolvenz', company_active: 'Firma aktiv', vat_valid: 'USt-ID gültig', is_legal_person: 'Juristische Person' }
-const abilityItems = computed(() => score.value?.ability_components || {})
+// Payment analysis (v3) — falls back to legacy ability_components
+const paymentJson = computed(() => score.value?.payment_analysis_json || {})
+const abilityScore = computed(() => paymentJson.value.ability_score ?? score.value?.ability_score ?? 50)
+const willingnessScore = computed(() => {
+  const p = paymentJson.value.p_willingness
+  return p != null ? Math.round(p * 100) : (score.value?.willingness_score ?? 50)
+})
 
-const willingnessLabels = { base: 'Basis', responded_to_reminder: 'Auf Mahnung reagiert', partial_payment: 'Teilzahlung', settlement_offered: 'Vergleich angeboten', repeat_defendant: 'Wiederholungstäter' }
+const willingnessLabels = { responded_to_reminder: 'Auf Mahnung reagiert', partial_payment: 'Teilzahlung', settlement_offered: 'Vergleich angeboten', repeat_defendant: 'Wiederholungstäter' }
 const willingnessItems = computed(() => score.value?.willingness_components || {})
 
-const bayesRates = ['served', 'default', 'settle', 'collect']
-const rateLabels = { served: 'Zustellung', default: 'Versäumnis', settle: 'Vergleich', collect: 'Inkasso' }
+const bayesRates = ['valid', 'provable', 'payment']
+const rateLabels = { valid: 'Anspruchs-Gültigkeit', provable: 'Beweisbarkeit', payment: 'Zahlung' }
+
+function insolvencyClass(risk) {
+  if (risk === 'high') return 'prob-low'
+  if (risk === 'low') return 'prob-high'
+  return 'prob-medium'
+}
 
 function priors(rate) { return score.value?.priors_json?.[rate] || { alpha: 0, beta: 0 } }
 function obs(rate) { return score.value?.observations_json?.[rate] || { successes: 0, trials: 0 } }
@@ -325,6 +377,8 @@ onMounted(async () => {
 .hero-value { font-size: 3rem; font-weight: 800; line-height: 1; }
 .hero-label { font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; }
 .hero-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; font-size: 0.78rem; }
+
+.formula-note { font-size: 0.78rem; color: var(--text-secondary); margin-top: 12px; font-style: italic; text-align: center; }
 
 /* Prob bars */
 .prob-bars { display: flex; flex-direction: column; gap: 10px; }

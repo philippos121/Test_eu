@@ -20,6 +20,7 @@
           <thead>
             <tr>
               <th>Rate</th>
+              <th>Beschreibung</th>
               <th>&alpha;</th>
               <th>&beta;</th>
               <th>E[p] = &alpha;/(&alpha;+&beta;)</th>
@@ -28,6 +29,7 @@
           <tbody>
             <tr v-for="d in defaults" :key="d.name">
               <td class="rate-name">{{ d.name }}</td>
+              <td class="text-secondary" style="font-size:0.82rem">{{ d.desc }}</td>
               <td>{{ d.alpha }}</td>
               <td>{{ d.beta }}</td>
               <td class="prob-val">{{ ((d.alpha / (d.alpha + d.beta)) * 100).toFixed(0) }}%</td>
@@ -78,10 +80,9 @@
           <div class="form-group">
             <label>Rate</label>
             <select v-model="form.rate_name" class="form-control" :disabled="editing">
-              <option value="served">served (Zustellung)</option>
-              <option value="default">default (Versäumnis)</option>
-              <option value="settle">settle (Vergleich)</option>
-              <option value="collect">collect (Inkasso)</option>
+              <option value="valid">valid (Anspruchs-Gültigkeit)</option>
+              <option value="provable">provable (Beweisbarkeit)</option>
+              <option value="payment">payment (Zahlung)</option>
             </select>
           </div>
           <div class="form-group">
@@ -125,18 +126,17 @@ const store = useAdminStore()
 const showModal = ref(false)
 const editing = ref(null) // prior id or null
 const formError = ref('')
-const form = ref({ rate_name: 'served', claim_subtype: 'general', country: '*', alpha: 2.0, beta: 2.0 })
+const form = ref({ rate_name: 'valid', claim_subtype: 'general', country: '*', alpha: 2.0, beta: 2.0 })
 
 const defaults = [
-  { name: 'served', alpha: 8, beta: 2 },
-  { name: 'default', alpha: 5, beta: 5 },
-  { name: 'settle', alpha: 2, beta: 8 },
-  { name: 'collect', alpha: 6, beta: 4 },
+  { name: 'valid',    alpha: 6, beta: 2, desc: 'Anspruchs-Gültigkeit (~75%)' },
+  { name: 'provable', alpha: 4, beta: 6, desc: 'Beweisbarkeit (~40%)' },
+  { name: 'payment',  alpha: 5, beta: 5, desc: 'Zahlung (~50%)' },
 ]
 
 function openCreate() {
   editing.value = null
-  form.value = { rate_name: 'served', claim_subtype: 'general', country: '*', alpha: 2.0, beta: 2.0 }
+  form.value = { rate_name: 'valid', claim_subtype: 'general', country: '*', alpha: 2.0, beta: 2.0 }
   formError.value = ''
   showModal.value = true
 }

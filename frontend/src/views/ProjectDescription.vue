@@ -53,7 +53,7 @@
         <p>{{ t('project.probabilityText') }}</p>
 
         <div class="prob-diagram mt-2">
-          <h3>Entscheidungsbaum der Erfolgswahrscheinlichkeit</h3>
+          <h3>Drei-Säulen-Formel der Erfolgswahrscheinlichkeit</h3>
           <div class="tree">
             <div class="tree-node root">
               <div class="node-label">p<sub>cash</sub></div>
@@ -61,24 +61,38 @@
             <div class="tree-level">
               <div class="tree-branch">
                 <div class="tree-node">
-                  <div class="node-label">p<sub>served</sub></div>
-                  <div class="node-desc">Zustellungsrate<br/><small>~70% (ESCP)</small></div>
+                  <div class="node-label">p<sub>valid</sub></div>
+                  <div class="node-desc">Anspruch rechtlich gültig<br/><small>LLM-Rechtsanalyse + Statistik</small></div>
                 </div>
               </div>
               <span class="tree-op">&times;</span>
               <div class="tree-branch">
                 <div class="tree-node">
-                  <div class="node-label">p<sub>favorable</sub></div>
-                  <div class="node-desc">Vergleich / Versäumnis / Sieg</div>
+                  <div class="node-label">p<sub>provable</sub></div>
+                  <div class="node-desc">Anspruch beweisbar<br/><small>Beweisscore + Statistik</small></div>
                 </div>
               </div>
               <span class="tree-op">&times;</span>
               <div class="tree-branch">
                 <div class="tree-node">
-                  <div class="node-label">p<sub>collect</sub></div>
-                  <div class="node-desc">Inkasso-Erfolg<br/><small>adj. Zahlungsfähigkeit</small></div>
+                  <div class="node-label">p<sub>payment</sub></div>
+                  <div class="node-desc">Zahlung tatsächlich erfolgt<br/><small>Insolvenzprüfung + Schuldnerhistorie</small></div>
                 </div>
               </div>
+            </div>
+          </div>
+          <div class="pillar-details mt-2">
+            <div class="pillar-item">
+              <strong>p<sub>valid</sub></strong> = P(entstanden) × P(nicht erloschen) × P(durchsetzbar)<br/>
+              <small>70% LLM-Rechtsanalyse (GPT-5.2 + optionale Web-Suche nach Rechtsordnung) + 30% Statistik vergleichbarer Fälle</small>
+            </div>
+            <div class="pillar-item">
+              <strong>p<sub>provable</sub></strong> = Beweisbarkeit der Anspruchsvoraussetzungen<br/>
+              <small>40% regelbasierter Beweisscore (Vertrag, Liefernachweis, Rechnung, Mahnung) + 60% Statistik vergleichbarer Fälle</small>
+            </div>
+            <div class="pillar-item">
+              <strong>p<sub>payment</sub></strong> = Tatsächliche Zahlung nach Urteil<br/>
+              <small>65% Einzelfall (50% Zahlungsfähigkeit via LLM/Insolvenzregister + 50% Zahlungswilligkeit aus Schuldnerhistorie) + 35% Statistik</small>
             </div>
           </div>
         </div>
@@ -259,6 +273,10 @@ const { t } = useI18nStore()
 }
 
 .prob-diagram h3 { font-size: 1rem; margin-bottom: 16px; }
+
+.pillar-details { display: flex; flex-direction: column; gap: 10px; text-align: left; }
+.pillar-item { background: white; border-left: 3px solid var(--primary); border-radius: 4px; padding: 10px 14px; font-size: 0.82rem; line-height: 1.5; }
+.pillar-item small { color: var(--text-secondary); }
 
 .tree-level {
   display: flex;

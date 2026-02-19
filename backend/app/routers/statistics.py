@@ -430,8 +430,11 @@ def _build_seed_cases(admin_user_id: UUID) -> list[dict]:
         ],
         "score_overrides": {
             "evidence_score": 90.0,
-            "p_served": 0.80, "p_default": 0.55, "p_win_contested": 0.75,
-            "p_settle": 0.25, "p_collect": 0.70, "p_cash_success": 0.52,
+            "p_claim_valid": 0.87, "p_claim_provable": 0.82, "p_payment": 0.73,
+            "p_cash_success": 0.52,
+            "legal_validity_json": {"p_entstanden": 0.92, "p_not_untergegangen": 0.95, "p_durchsetzbar": 0.90, "applicable_law": "BGB §433", "p_claim_valid_llm": 0.79, "stat_valid": 0.75},
+            "provability_json": {"evidence_score": 90.0, "p_evidence_sigmoid": 0.98, "stat_provable": 0.55, "p_claim_provable": 0.82},
+            "payment_analysis_json": {"ability_score": 78, "insolvency_risk": "low", "p_willingness": 0.75, "p_payment": 0.73},
         },
     })
 
@@ -501,8 +504,11 @@ def _build_seed_cases(admin_user_id: UUID) -> list[dict]:
         ],
         "score_overrides": {
             "evidence_score": 15.0,
-            "p_served": 0.70, "p_default": 0.40, "p_win_contested": 0.15,
-            "p_settle": 0.10, "p_collect": 0.30, "p_cash_success": 0.05,
+            "p_claim_valid": 0.55, "p_claim_provable": 0.18, "p_payment": 0.50,
+            "p_cash_success": 0.05,
+            "legal_validity_json": {"p_entstanden": 0.60, "p_not_untergegangen": 0.90, "p_durchsetzbar": 0.85, "applicable_law": "BGB §611", "p_claim_valid_llm": 0.46, "stat_valid": 0.75},
+            "provability_json": {"evidence_score": 15.0, "p_evidence_sigmoid": 0.02, "stat_provable": 0.40, "p_claim_provable": 0.18},
+            "payment_analysis_json": {"ability_score": 52, "insolvency_risk": "unknown", "p_willingness": 0.50, "p_payment": 0.50},
         },
     })
 
@@ -584,8 +590,11 @@ def _build_seed_cases(admin_user_id: UUID) -> list[dict]:
         ],
         "score_overrides": {
             "evidence_score": 65.0,
-            "p_served": 0.75, "p_default": 0.35, "p_win_contested": 0.50,
-            "p_settle": 0.45, "p_collect": 0.60, "p_cash_success": 0.35,
+            "p_claim_valid": 0.65, "p_claim_provable": 0.55, "p_payment": 0.98,
+            "p_cash_success": 0.35,
+            "legal_validity_json": {"p_entstanden": 0.65, "p_not_untergegangen": 0.92, "p_durchsetzbar": 0.90, "applicable_law": "BGB §634 (Werkmängel) / Rom-I-VO Art. 4", "p_claim_valid_llm": 0.54, "stat_valid": 0.75},
+            "provability_json": {"evidence_score": 65.0, "p_evidence_sigmoid": 0.73, "stat_provable": 0.40, "p_claim_provable": 0.55},
+            "payment_analysis_json": {"ability_score": 80, "insolvency_risk": "low", "p_willingness": 0.90, "p_payment": 0.98},
         },
     })
 
@@ -666,8 +675,11 @@ def _build_seed_cases(admin_user_id: UUID) -> list[dict]:
         ],
         "score_overrides": {
             "evidence_score": 85.0,
-            "p_served": 0.78, "p_default": 0.55, "p_win_contested": 0.70,
-            "p_settle": 0.15, "p_collect": 0.10, "p_cash_success": 0.08,
+            "p_claim_valid": 0.88, "p_claim_provable": 0.82, "p_payment": 0.11,
+            "p_cash_success": 0.08,
+            "legal_validity_json": {"p_entstanden": 0.92, "p_not_untergegangen": 0.85, "p_durchsetzbar": 0.90, "applicable_law": "tschech. OZ §2079 / Rom-I-VO Art. 4", "p_claim_valid_llm": 0.70, "stat_valid": 0.75},
+            "provability_json": {"evidence_score": 85.0, "p_evidence_sigmoid": 0.95, "stat_provable": 0.40, "p_claim_provable": 0.82},
+            "payment_analysis_json": {"ability_score": 5, "insolvency_risk": "high", "ability_reasoning": "Insolvenzverfahren beim Handelsregister Praha eingetragen", "p_willingness": 0.50, "p_payment": 0.11},
         },
     })
 
@@ -748,8 +760,11 @@ def _build_seed_cases(admin_user_id: UUID) -> list[dict]:
         ],
         "score_overrides": {
             "evidence_score": 75.0,
-            "p_served": 0.72, "p_default": 0.50, "p_win_contested": 0.60,
-            "p_settle": 0.20, "p_collect": 0.65, "p_cash_success": 0.40,
+            "p_claim_valid": 0.83, "p_claim_provable": 0.76, "p_payment": 0.63,
+            "p_cash_success": 0.40,
+            "legal_validity_json": {"p_entstanden": 0.88, "p_not_untergegangen": 0.92, "p_durchsetzbar": 0.90, "applicable_law": "frz. Code Civil Art. 1709 / Rom-I-VO Art. 4", "p_claim_valid_llm": 0.73, "stat_valid": 0.75},
+            "provability_json": {"evidence_score": 75.0, "p_evidence_sigmoid": 0.88, "stat_provable": 0.40, "p_claim_provable": 0.76},
+            "payment_analysis_json": {"ability_score": 68, "insolvency_risk": "low", "p_willingness": 0.55, "p_payment": 0.63},
         },
     })
 
@@ -939,27 +954,31 @@ async def seed_demo_data(
             for event in item["events"]:
                 db.add(event)
 
-            # Create a process score snapshot
+            # Create a v3 process score snapshot
             overrides = item["score_overrides"]
+            pj = overrides.get("payment_analysis_json", {})
             score = CaseProcessScore(
                 case_id=item["case"].id,
+                # v3 pillars
+                p_claim_valid=overrides.get("p_claim_valid"),
+                p_claim_provable=overrides.get("p_claim_provable"),
+                p_payment=overrides.get("p_payment"),
+                legal_validity_json=overrides.get("legal_validity_json"),
+                provability_json=overrides.get("provability_json"),
+                payment_analysis_json=pj if pj else None,
+                # legacy fields (for backward compat display)
                 evidence_score=overrides.get("evidence_score", 50.0),
-                evidence_breakdown={"source": "seed_data"},
-                ability_score=75.0,
-                ability_components={"source": "seed_data"},
-                willingness_score=50.0,
-                willingness_components={"source": "seed_data"},
-                p_served=overrides.get("p_served", 0.70),
-                p_default=overrides.get("p_default", 0.50),
-                p_win_contested=overrides.get("p_win_contested", 0.50),
-                p_settle=overrides.get("p_settle", 0.30),
-                p_collect=overrides.get("p_collect", 0.60),
+                evidence_breakdown=overrides.get("provability_json", {}).get("evidence_breakdown") or {"source": "seed_data"},
+                ability_score=pj.get("ability_score", 75.0),
+                ability_components={"insolvency_risk": pj.get("insolvency_risk", "unknown"), "source": "seed_data"},
+                willingness_score=round((pj.get("p_willingness", 0.5)) * 100, 1),
+                willingness_components={"p_willingness": pj.get("p_willingness", 0.5), "source": "seed_data"},
                 p_cash_success=overrides.get("p_cash_success", 0.25),
                 priors_json={"source": "seed_data"},
                 posteriors_json={"source": "seed_data"},
                 observations_json={"source": "seed_data"},
                 drivers_json=[],
-                model_version="v2-seed",
+                model_version="v3-seed",
             )
             db.add(score)
             fictional_count += 1
