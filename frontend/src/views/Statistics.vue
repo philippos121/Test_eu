@@ -597,10 +597,11 @@ const paginatedCases = computed(() => {
 
 const previewEV = computed(() => {
   const pObs = testForm.value.p_recht * testForm.value.p_beweis
+  const pCollect = testForm.value.p_eintreibung ?? 1.0
   const costs = 35 + 75 + 50
   const lossCosts = 200
   if (pObs > 0) {
-    return pObs * 0.30 * testForm.value.claim_amount - costs - (1 - pObs) * lossCosts
+    return pObs * pCollect * 0.30 * testForm.value.claim_amount - costs - (1 - pObs) * lossCosts
   }
   return -(costs + lossCosts)
 })
@@ -634,7 +635,7 @@ function openDetail(c) {
 
 async function loadStats() {
   try {
-    const res = await api.get('/api/statistics/overview')
+    const res = await api.get('/statistics/overview')
     stats.value = res.data
     testResult.value = null
   } catch (err) {
@@ -646,7 +647,7 @@ async function seedData() {
   seeding.value = true
   seedMsg.value = ''
   try {
-    const res = await api.post('/api/statistics/seed')
+    const res = await api.post('/statistics/seed')
     seedMsg.value = res.data.message
     await loadStats()
   } catch (err) {
@@ -660,7 +661,7 @@ async function updatePriors() {
   updating.value = true
   updateMsg.value = ''
   try {
-    const res = await api.post('/api/statistics/update-priors')
+    const res = await api.post('/statistics/update-priors')
     const items = res.data.priors || []
     updateMsg.value = items.map(p => `${p.rate_name}: ${(p.posterior_mean * 100).toFixed(1)}%`).join(' | ')
     await loadStats()
@@ -675,7 +676,7 @@ async function submitTestCase() {
   submittingTest.value = true
   testResult.value = null
   try {
-    const res = await api.post('/api/statistics/test-case', testForm.value)
+    const res = await api.post('/statistics/test-case', testForm.value)
     testResult.value = res.data
     await loadStats()
   } catch (err) {

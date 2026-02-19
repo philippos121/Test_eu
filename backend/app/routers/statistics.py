@@ -354,13 +354,14 @@ def _compute_pipeline_v3(scenario: dict, claim_amount: float) -> dict:
     p_obsiegen = round(p_recht * p_beweis, 4)
     p_gesamt = round(p_obsiegen * p_eintreibung, 4) if p_eintreibung is not None else None
 
-    # EV calculation
+    # EV calculation — revenue only flows if we can actually collect
     fee_rate = 0.30
     costs = 35.0 + 75.0 + 50.0  # filing + service + enforcement
     loss_costs = 200.0
+    p_collect = p_eintreibung if p_eintreibung is not None else 1.0
     if p_obsiegen > 0:
         ev = round(
-            p_obsiegen * fee_rate * claim_amount
+            p_obsiegen * p_collect * fee_rate * claim_amount
             - costs
             - (1 - p_obsiegen) * loss_costs,
             2,
