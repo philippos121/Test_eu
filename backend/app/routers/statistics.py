@@ -289,13 +289,13 @@ async def statistics_overview(
             ci_high=post.ci_high,
         ))
 
-    # ── Last 20 completed cases with detail ──
-    # Sort by created_at descending, take 20
+    # ── All completed cases with detail ──
+    # Sort by created_at descending (no arbitrary limit so all cases are shown)
     sorted_completed = sorted(
         completed_cases_list,
         key=lambda c: c.created_at or datetime.min,
         reverse=True,
-    )[:20]
+    )
 
     # Pre-fetch latest p_cash_success for these cases in one query
     detail_ids = [c.id for c in sorted_completed]

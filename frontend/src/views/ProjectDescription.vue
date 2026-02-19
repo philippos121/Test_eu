@@ -116,39 +116,29 @@
         <p>{{ t('project.expectedValueText') }}</p>
 
         <div class="ev-example mt-2">
-          <h3>Beispielrechnung</h3>
+          <h3>Beispielrechnung (Portalbetreiber-Perspektive)</h3>
+          <p class="ev-note">Forderung: 2.000 EUR &middot; Gewinnwahrscheinlichkeit p<sub>cash</sub> = 65%</p>
           <table class="ev-table">
             <tbody>
               <tr>
-                <td>Forderungsbetrag</td>
-                <td class="text-right"><strong>3.000,00 EUR</strong></td>
-              </tr>
-              <tr>
-                <td>Erfolgswahrscheinlichkeit (p<sub>cash</sub>)</td>
-                <td class="text-right">65%</td>
-              </tr>
-              <tr>
-                <td>Erwartete Zahlung</td>
-                <td class="text-right">1.950,00 EUR</td>
+                <td>Erw. Provision (65% &times; 30% &times; 2.000)</td>
+                <td class="text-right success">+390,00 EUR</td>
               </tr>
               <tr class="sep">
-                <td>Gerichtsgebühren</td>
-                <td class="text-right danger">-105,00 EUR</td>
+                <td>Zustellungskosten (immer fällig)</td>
+                <td class="text-right danger">−75,00 EUR</td>
               </tr>
               <tr>
-                <td>Zustellungskosten</td>
-                <td class="text-right danger">-75,00 EUR</td>
-              </tr>
-              <tr>
-                <td>Provision (30%)</td>
-                <td class="text-right danger">-585,00 EUR</td>
+                <td>Erw. Verlustkosten (35% &times; (Gericht 70 + Anwalt 125 + Gegner 150))</td>
+                <td class="text-right danger">−120,75 EUR</td>
               </tr>
               <tr class="total">
-                <td><strong>Erwarteter Netto-Ertrag</strong></td>
-                <td class="text-right success"><strong>1.185,00 EUR</strong></td>
+                <td><strong>Erwarteter Netto-Ertrag (Portal)</strong></td>
+                <td class="text-right success"><strong>194,25 EUR</strong></td>
               </tr>
             </tbody>
           </table>
+          <p class="ev-formula-note">Formel: EW = p_win &times; 30% &times; Forderung &minus; Zustellkosten &minus; p_loss &times; (Gericht + Anwalt + Gegnerkosten)</p>
         </div>
       </section>
 
@@ -333,7 +323,9 @@ const { t } = useI18nStore()
   padding: 24px;
 }
 
-.ev-example h3 { font-size: 1rem; margin-bottom: 12px; }
+.ev-example h3 { font-size: 1rem; margin-bottom: 6px; }
+.ev-note { font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px; }
+.ev-formula-note { font-size: 0.78rem; color: var(--text-secondary); margin-top: 10px; font-style: italic; }
 
 .ev-table {
   width: 100%;
