@@ -1085,14 +1085,18 @@ async def seed_demo_data(
     try:
         # ── optionally delete existing [HIST] cases ──
         if force:
-            # Fetch IDs of existing [HIST] cases first (to cascade-delete events)
+            # Fetch IDs of existing [HIST] cases first (to cascade-delete child rows)
             hist_ids_res = await db.execute(
                 select(Case.id).where(Case.title.like("[HIST]%"))
             )
             hist_ids = [row[0] for row in hist_ids_res.fetchall()]
             if hist_ids:
+                # Delete in FK-safe order: events → scores → cases
                 await db.execute(
                     delete(CaseEvent).where(CaseEvent.case_id.in_(hist_ids))
+                )
+                await db.execute(
+                    delete(CaseProcessScore).where(CaseProcessScore.case_id.in_(hist_ids))
                 )
                 await db.execute(
                     delete(Case).where(Case.id.in_(hist_ids))
