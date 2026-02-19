@@ -505,8 +505,22 @@ async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
     p_payment      = blend(p_individual, stat_payment, PAYMENT_IND_WEIGHT)
     p_payment      = max(0.0, min(1.0, p_payment))
 
-    # Final combined probability
+    # Final combined probability (pillar product)
     p_cash = p_claim_valid * p_claim_provable * p_payment
+
+    # NN blending — optional, non-blocking; weight grows with training-set size
+    p_nn_raw: float | None = None
+    nn_pred_json: dict | None = None
+    try:
+        from .nn_service import predict_for_case  # lazy import avoids circular dep
+        p_nn_raw, nn_pred_json = await predict_for_case(case, db)
+        if p_nn_raw is not None and nn_pred_json is not None:
+            w = nn_pred_json["nn_weight"]
+            if w > 0.0:
+                p_cash = (1.0 - w) * p_cash + w * p_nn_raw
+                p_cash = max(0.0, min(1.0, p_cash))
+    except Exception:
+        pass  # NN failure must never break scoring
 
     # H) Drivers
     drivers = compute_drivers(ev, legal, ability, p_willingness, posteriors)
@@ -590,6 +604,8 @@ async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
         willingness_score=round(p_willingness * 100, 1),
         willingness_components={"p_willingness": p_willingness},
         p_cash_success=round(p_cash, 4),
+        p_nn_prediction=round(p_nn_raw, 4) if p_nn_raw is not None else None,
+        nn_prediction_json=nn_pred_json,
         priors_json=priors_data,
         posteriors_json=post_data,
         observations_json=obs_data,

@@ -167,6 +167,34 @@
             </table>
           </div>
 
+          <!-- NN Prediction -->
+          <div class="card fade-in mt-2" v-if="score.p_nn_prediction != null">
+            <h3 class="section-title">Neuronales Netz — Vorhersage</h3>
+            <div class="model-meta">
+              <div class="meta-item">
+                <span class="meta-label">NN-Vorhersage (roh)</span>
+                <span :class="['meta-val', probClass(score.p_nn_prediction)]">{{ (score.p_nn_prediction * 100).toFixed(1) }}%</span>
+              </div>
+              <div class="meta-item" v-if="score.nn_prediction_json?.nn_weight != null">
+                <span class="meta-label">Mischgewicht</span>
+                <span class="meta-val">{{ (score.nn_prediction_json.nn_weight * 100).toFixed(0) }}%</span>
+              </div>
+              <div class="meta-item" v-if="score.nn_prediction_json?.n_train_cases != null">
+                <span class="meta-label">Trainingsfälle</span>
+                <span class="meta-val">{{ score.nn_prediction_json.n_train_cases }}</span>
+              </div>
+              <div class="meta-item" v-if="score.nn_prediction_json?.val_accuracy != null">
+                <span class="meta-label">Modell Val-Acc</span>
+                <span :class="['meta-val', accClass(score.nn_prediction_json.val_accuracy)]">{{ (score.nn_prediction_json.val_accuracy * 100).toFixed(1) }}%</span>
+              </div>
+              <div class="meta-item" v-if="score.nn_prediction_json?.model_version != null">
+                <span class="meta-label">Modell-Version</span>
+                <span class="meta-val">v{{ score.nn_prediction_json.model_version }}</span>
+              </div>
+            </div>
+            <p class="formula-note">p(cash) = {{ (score.nn_prediction_json?.nn_weight ?? 0) > 0 ? `(1 - ${(score.nn_prediction_json.nn_weight*100).toFixed(0)}%) × p_pillar + ${(score.nn_prediction_json.nn_weight*100).toFixed(0)}% × p_nn` : 'Pillar-Produkt (kein NN-Gewicht aktiv)' }}</p>
+          </div>
+
           <!-- Drivers -->
           <div class="card fade-in mt-2" v-if="score.drivers_json?.length">
             <h3 class="section-title">Top-Einflussfaktoren</h3>
@@ -295,6 +323,12 @@ function insolvencyClass(risk) {
   if (risk === 'low') return 'prob-high'
   return 'prob-medium'
 }
+function accClass(a) {
+  if (a == null) return ''
+  if (a >= 0.75) return 'prob-high'
+  if (a >= 0.60) return 'prob-medium'
+  return 'prob-low'
+}
 
 function priors(rate) { return score.value?.priors_json?.[rate] || { alpha: 0, beta: 0 } }
 function obs(rate) { return score.value?.observations_json?.[rate] || { successes: 0, trials: 0 } }
@@ -379,6 +413,10 @@ onMounted(async () => {
 .hero-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; font-size: 0.78rem; }
 
 .formula-note { font-size: 0.78rem; color: var(--text-secondary); margin-top: 12px; font-style: italic; text-align: center; }
+.model-meta { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 8px; }
+.meta-item { display: flex; flex-direction: column; gap: 2px; }
+.meta-label { font-size: 0.72rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+.meta-val { font-size: 1rem; font-weight: 700; }
 
 /* Prob bars */
 .prob-bars { display: flex; flex-direction: column; gap: 10px; }

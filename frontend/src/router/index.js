@@ -54,6 +54,12 @@ const routes = [
     component: () => import('../views/AdminPriors.vue'),
     meta: { auth: true },
   },
+  {
+    path: '/admin/nn',
+    name: 'NNDashboard',
+    component: () => import('../views/NNDashboard.vue'),
+    meta: { auth: true },
+  },
 ]
 
 const router = createRouter({

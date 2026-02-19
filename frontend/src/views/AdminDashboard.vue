@@ -3,7 +3,10 @@
     <div class="container">
       <div class="page-header fade-in">
         <h1>Admin Dashboard</h1>
-        <router-link to="/admin/priors" class="btn btn-outline">Priors konfigurieren</router-link>
+        <div style="display:flex;gap:8px">
+          <router-link to="/admin/priors" class="btn btn-outline">Priors konfigurieren</router-link>
+          <router-link to="/admin/nn" class="btn btn-outline">Neuronales Netz</router-link>
+        </div>
       </div>
 
       <div class="card fade-in">

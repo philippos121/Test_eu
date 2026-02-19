@@ -273,6 +273,10 @@ class CaseProcessScore(Base):
     posteriors_json = Column(JSONB, default=dict)
     observations_json = Column(JSONB, default=dict)
 
+    # NN prediction component
+    p_nn_prediction  = Column(Float, nullable=True)   # blended NN probability
+    nn_prediction_json = Column(JSONB, nullable=True)  # {p_nn_raw, nn_weight, n_train, model_version}
+
     # Top-5 drivers
     drivers_json = Column(JSONB, default=list)
 
@@ -282,7 +286,24 @@ class CaseProcessScore(Base):
     case = relationship("Case", back_populates="process_scores")
 
 
-class PriorsConfig(Base):
+class NNModel(Base):
+    """Stored neural network weights for case-outcome prediction."""
+    __tablename__ = "nn_models"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    version = Column(Integer, default=1, nullable=False)
+    is_active = Column(Boolean, default=False, nullable=False)
+    feature_names = Column(JSONB, nullable=False, default=list)
+    architecture = Column(JSONB, nullable=False, default=dict)
+    weights = Column(JSONB, nullable=False, default=dict)
+    training_history = Column(JSONB, default=list)
+    feature_importance = Column(JSONB, default=list)
+    hyperparams = Column(JSONB, default=dict)
+    n_train_cases = Column(Integer, default=0)
+    n_val_cases = Column(Integer, default=0)
+    train_accuracy = Column(Float, nullable=True)
+    val_accuracy = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
     """Configurable Beta priors per rate, per claim_subtype + country."""
     __tablename__ = "priors_config"
 

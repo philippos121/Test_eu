@@ -11,6 +11,7 @@ from .config import get_settings
 from .database import async_session, init_db
 from .models import Case, CaseProcessScore, User
 from .routers import admin, auth, cases, chat, documents, statistics
+from .routers import nn as nn_router_mod
 from .routers.statistics import _build_historical_events, _build_seed_cases
 
 settings = get_settings()
@@ -160,6 +161,7 @@ app.include_router(documents.router)
 app.include_router(admin.router)
 app.include_router(statistics.router)
 app.include_router(statistics.ev_router)
+app.include_router(nn_router_mod.router)
 
 
 @app.get("/api/health")

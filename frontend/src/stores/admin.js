@@ -109,6 +109,41 @@ export const useAdminStore = defineStore('admin', () => {
     priors.value = priors.value.filter(p => p.id !== id)
   }
 
+  // Neural Network
+  const nnModel = ref(null)
+  const nnDataSummary = ref({})
+  const nnPredictions = ref([])
+
+  async function fetchNNStatus() {
+    try {
+      const { data } = await api.get('/nn/status')
+      nnModel.value = data
+      return data
+    } catch { nnModel.value = null }
+  }
+
+  async function fetchNNDataSummary() {
+    try {
+      const { data } = await api.get('/nn/data-summary')
+      nnDataSummary.value = data
+      return data
+    } catch { nnDataSummary.value = {} }
+  }
+
+  async function fetchNNPredictions() {
+    try {
+      const { data } = await api.get('/nn/predictions')
+      nnPredictions.value = data
+      return data
+    } catch { nnPredictions.value = [] }
+  }
+
+  async function trainNN(req) {
+    const { data } = await api.post('/nn/train', req)
+    if (data.success) await fetchNNStatus()
+    return data
+  }
+
   return {
     cases, currentCase, currentScore, scoreHistory, events, traces, priors, loading,
     fetchCases, fetchCase,
@@ -116,5 +151,7 @@ export const useAdminStore = defineStore('admin', () => {
     fetchEvents, addEvent,
     fetchTraces,
     fetchPriors, createPrior, updatePrior, deletePrior,
+    nnModel, nnDataSummary, nnPredictions,
+    fetchNNStatus, fetchNNDataSummary, fetchNNPredictions, trainNN,
   }
 })

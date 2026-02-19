@@ -279,6 +279,9 @@ class ProcessScoreRead(BaseModel):
     legal_validity_json: Optional[dict] = None
     provability_json: Optional[dict] = None
     payment_analysis_json: Optional[dict] = None
+    # Neural network component
+    p_nn_prediction: Optional[float] = None
+    nn_prediction_json: Optional[dict] = None
     # legacy / evidence
     evidence_score: float
     evidence_breakdown: dict
@@ -388,6 +391,54 @@ class StatisticsOverview(BaseModel):
     rate_summaries: dict  # e.g. {"served": {"successes": 70, "trials": 100, "rate": 0.70}, ...}
     historical_cases_loaded: int
     current_priors: list[PriorsConfigRead] = []
+
+
+# --- Neural Network ---
+
+class NNModelRead(BaseModel):
+    id: UUID
+    version: int
+    is_active: bool
+    feature_names: list
+    architecture: dict
+    training_history: list
+    feature_importance: list
+    hyperparams: dict
+    n_train_cases: int
+    n_val_cases: int
+    train_accuracy: Optional[float] = None
+    val_accuracy: Optional[float] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class NNTrainRequest(BaseModel):
+    epochs: int = 300
+    lr: float = 0.005
+    l2: float = 1e-4
+    batch_size: int = 16
+
+
+class NNTrainResponse(BaseModel):
+    success: bool
+    message: str
+    version: Optional[int] = None
+    n_train_cases: Optional[int] = None
+    n_val_cases: Optional[int] = None
+    train_accuracy: Optional[float] = None
+    val_accuracy: Optional[float] = None
+    history: Optional[list] = None
+    feature_importance: Optional[list] = None
+
+
+class NNCasePrediction(BaseModel):
+    case_id: str
+    case_title: str
+    features: dict
+    p_nn: float
+    actual_outcome: Optional[float] = None
+    correct: Optional[bool] = None
 
 
 class PriorUpdateResult(BaseModel):
