@@ -501,7 +501,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useI18nStore } from '../stores/i18n'
-import api from '@/api'
+import api from '../services/api'
 
 const { t } = useI18nStore()
 
