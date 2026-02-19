@@ -1,4 +1,4 @@
-"""Unit tests for scoring engine v3."""
+"""Unit tests for scoring engine v4."""
 import math
 import pytest
 from unittest.mock import MagicMock
@@ -6,15 +6,10 @@ from unittest.mock import MagicMock
 from app.services.scoring import (
     score_evidence,
     score_willingness,
-    bayes_update,
-    count_events,
     compute_drivers,
     evidence_to_prob,
-    blend,
     merge_facts_monotonic,
     EvidenceResult,
-    BayesPosterior,
-    _beta_quantile,
 )
 from app.services.legal_analyzer import LegalValidityResult, PaymentAbilityResult
 from app.models import CaseEventType
@@ -158,153 +153,10 @@ class TestWillingnessScorer:
 
 
 # =====================================================================
-# C) Blend function
-# =====================================================================
-
-class TestBlend:
-    def test_full_individual_weight(self):
-        """weight=1.0 → return individual_p unchanged"""
-        assert blend(0.7, 0.3, 1.0) == pytest.approx(0.7, abs=0.001)
-
-    def test_full_stat_weight(self):
-        """weight=0.0 → return stat_p unchanged"""
-        assert blend(0.7, 0.3, 0.0) == pytest.approx(0.3, abs=0.001)
-
-    def test_equal_weights_average(self):
-        assert blend(0.6, 0.4, 0.5) == pytest.approx(0.5, abs=0.001)
-
-    def test_asymmetric_weights(self):
-        result = blend(0.8, 0.4, 0.70)
-        expected = 0.70 * 0.8 + 0.30 * 0.4
-        assert result == pytest.approx(expected, abs=0.001)
-
-
-# =====================================================================
-# D) BayesUpdater
-# =====================================================================
-
-class TestBayesUpdater:
-    def test_no_observations(self):
-        post = bayes_update(7.0, 3.0, 0, 0)
-        assert post.alpha_post == 7.0
-        assert post.beta_post == 3.0
-        assert post.mean == pytest.approx(0.7, abs=0.001)
-
-    def test_with_successes(self):
-        post = bayes_update(7.0, 3.0, 3, 4)
-        assert post.alpha_post == 10.0
-        assert post.beta_post == 4.0
-        assert post.mean == pytest.approx(10.0 / 14.0, abs=0.001)
-
-    def test_all_failures(self):
-        post = bayes_update(2.0, 2.0, 0, 5)
-        assert post.alpha_post == 2.0
-        assert post.beta_post == 7.0
-        assert post.mean == pytest.approx(2.0 / 9.0, abs=0.001)
-
-    def test_smoothing_prevents_extremes(self):
-        post = bayes_update(2.0, 8.0, 10, 10)
-        assert post.mean < 1.0
-        assert post.mean > 0.5
-
-    def test_credible_interval_exists(self):
-        post = bayes_update(7.0, 3.0, 0, 0)
-        assert post.ci_low < post.mean
-        assert post.ci_high > post.mean
-        assert 0.0 <= post.ci_low <= 1.0
-        assert 0.0 <= post.ci_high <= 1.0
-
-    def test_more_data_narrows_ci(self):
-        post_few = bayes_update(5.0, 5.0, 3, 5)
-        post_many = bayes_update(5.0, 5.0, 30, 50)
-        assert (post_many.ci_high - post_many.ci_low) < (post_few.ci_high - post_few.ci_low)
-
-
-# =====================================================================
-# D2) Beta quantile helper
-# =====================================================================
-
-class TestBetaQuantile:
-    def test_symmetric_prior(self):
-        q05 = _beta_quantile(5.0, 5.0, 0.05)
-        q95 = _beta_quantile(5.0, 5.0, 0.95)
-        assert q05 < 0.5
-        assert q95 > 0.5
-
-    def test_invalid_params(self):
-        assert _beta_quantile(0.0, 0.0, 0.5) == 0.5
-        assert _beta_quantile(-1.0, 5.0, 0.5) == 0.5
-
-
-# =====================================================================
-# E) count_events  (v3 rate names)
-# =====================================================================
-
-class TestCountEvents:
-    def _mock_event(self, event_type):
-        ev = MagicMock()
-        ev.event_type = event_type
-        return ev
-
-    def test_valid_rate_counts_judgment_win(self):
-        events = [
-            self._mock_event(CaseEventType.JUDGMENT_WIN),
-            self._mock_event(CaseEventType.JUDGMENT_WIN),
-            self._mock_event(CaseEventType.JUDGMENT_LOSS),
-        ]
-        s, n = count_events(events, "valid")
-        assert s == 2
-        assert n == 3
-
-    def test_valid_rate_counts_default_and_settled(self):
-        events = [
-            self._mock_event(CaseEventType.DEFAULT),
-            self._mock_event(CaseEventType.SETTLED),
-            self._mock_event(CaseEventType.JUDGMENT_LOSS),
-        ]
-        s, n = count_events(events, "valid")
-        assert s == 2
-        assert n == 3
-
-    def test_provable_rate_only_adversarial(self):
-        """DEFAULT events do NOT count for provability (no evidence test)."""
-        events = [
-            self._mock_event(CaseEventType.JUDGMENT_WIN),
-            self._mock_event(CaseEventType.DEFAULT),   # not counted for provable
-            self._mock_event(CaseEventType.JUDGMENT_LOSS),
-        ]
-        s, n = count_events(events, "provable")
-        assert s == 1    # only JUDGMENT_WIN
-        assert n == 2    # JUDGMENT_WIN + JUDGMENT_LOSS
-
-    def test_payment_rate(self):
-        events = [
-            self._mock_event(CaseEventType.PAYMENT_RECEIVED),
-            self._mock_event(CaseEventType.COLLECTION_FAILED),
-            self._mock_event(CaseEventType.COLLECTION_FAILED),
-        ]
-        s, n = count_events(events, "payment")
-        assert s == 1
-        assert n == 3
-
-    def test_no_events(self):
-        s, n = count_events([], "valid")
-        assert s == 0
-        assert n == 0
-
-
-# =====================================================================
-# F) Drivers v3
+# C) Drivers v4  (no posteriors parameter)
 # =====================================================================
 
 class TestDrivers:
-    def _make_posteriors(self):
-        return {
-            "valid":    BayesPosterior(6, 2, 0, 0, 6, 2, 0.75),
-            "provable": BayesPosterior(4, 6, 0, 0, 4, 6, 0.40),
-            "payment":  BayesPosterior(5, 5, 0, 0, 5, 5, 0.50),
-        }
-
     def test_produces_max_five(self):
         ev = EvidenceResult(total=20, missing=["A", "B", "C"])
         legal = LegalValidityResult(
@@ -316,7 +168,7 @@ class TestDrivers:
         )
         ability = PaymentAbilityResult(ability_score=10, insolvency_risk="high",
                                        reasoning="Insolvenzverfahren offen")
-        drivers = compute_drivers(ev, legal, ability, 0.3, self._make_posteriors())
+        drivers = compute_drivers(ev, legal, ability, 0.3)
         assert len(drivers) <= 5
 
     def test_strong_case_gets_positive_drivers(self):
@@ -329,7 +181,7 @@ class TestDrivers:
         )
         ability = PaymentAbilityResult(ability_score=80, insolvency_risk="low",
                                        reasoning="Aktives Unternehmen")
-        drivers = compute_drivers(ev, legal, ability, 0.70, self._make_posteriors())
+        drivers = compute_drivers(ev, legal, ability, 0.70)
         positive = [d for d in drivers if d["direction"] == "positive"]
         assert len(positive) >= 1
 
@@ -340,11 +192,11 @@ class TestDrivers:
             p_entstanden_reasoning="Anspruchsgrundlage unklar",
             p_not_untergegangen=0.85,
             p_durchsetzbar=0.4,
-            p_durchsetzbar_reasoning="Zuständigkeit fraglich",
+            p_durchsetzbar_reasoning="Verjährung möglicherweise eingetreten",
             p_claim_valid_llm=0.10,
         )
         ability = PaymentAbilityResult(ability_score=60, insolvency_risk="unknown")
-        drivers = compute_drivers(ev, legal, ability, 0.5, self._make_posteriors())
+        drivers = compute_drivers(ev, legal, ability, 0.5)
         factors = [d["factor"] for d in drivers]
         assert any("Anspruchsentstehung" in f or "Durchsetzbarkeit" in f for f in factors)
 
@@ -352,14 +204,14 @@ class TestDrivers:
         ev = EvidenceResult(total=60, missing=[])
         legal = LegalValidityResult(p_claim_valid_llm=0.6)
         ability = PaymentAbilityResult(ability_score=70, insolvency_risk="low")
-        drivers = compute_drivers(ev, legal, ability, 0.70, self._make_posteriors())
+        drivers = compute_drivers(ev, legal, ability, 0.70)
         willingness_drivers = [d for d in drivers if "Zahlungswilligkeit" in d["factor"]]
         assert len(willingness_drivers) == 1
         assert willingness_drivers[0]["direction"] == "positive"
 
 
 # =====================================================================
-# G) Monotonic fact merging
+# D) Monotonic fact merging
 # =====================================================================
 
 class TestMonotonicMerge:
@@ -390,7 +242,7 @@ class TestMonotonicMerge:
 
 
 # =====================================================================
-# H) Final probability formula  p_cash = p_valid × p_provable × p_payment
+# E) Final probability formula  p_cash = p_valid × p_provable × p_payment
 # =====================================================================
 
 class TestFinalFormula:
@@ -401,9 +253,9 @@ class TestFinalFormula:
         assert 0.0 * 0.8 * 0.7 == 0.0
 
     def test_typical_case(self):
-        p_valid    = blend(0.72, 0.75, 0.70)   # ~0.729
-        p_provable = blend(0.69, 0.40, 0.40)   # ~0.516
-        p_payment  = blend(0.60, 0.50, 0.65)   # ~0.565
+        # v4: pillars are pure LLM / evidence / individual — no blend with statistics
+        p_valid    = 0.72   # 100% LLM
+        p_provable = evidence_to_prob(65.0)   # evidence score 65 → sigmoid
+        p_payment  = 0.5 * 0.60 + 0.5 * 0.55  # 50% ability + 50% willingness
         p_cash = p_valid * p_provable * p_payment
         assert 0.0 < p_cash < 1.0
-        assert p_cash == pytest.approx(p_valid * p_provable * p_payment, abs=0.001)

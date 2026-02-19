@@ -1,33 +1,33 @@
 """
-Process-score engine v3: 3-pillar architecture.
+Process-score engine v4: 3-pillar architecture, no Bayes.
 
-The three pillars — and their weighting logic:
+The three pillars:
 
   1. p_claim_valid    = P(Anspruch entstanden AND nicht untergegangen AND durchsetzbar)
-       70 % LLM legal analysis (GPT-4o + optional web search, jurisdiction-specific)
-       30 % Bayesian statistics from comparable past cases
+       100 % LLM legal analysis (GPT-4o + optional web search, jurisdiction-specific)
+       LLM estimates three independent components and returns their product.
 
   2. p_claim_provable = P(Anspruch beweisbar | valid)
-       40 % rule-based evidence score (contract, delivery proof, invoice, dunning)
-       60 % Bayesian statistics (stronger statistical weight, as user specified)
+       100 % rule-based evidence score (contract, delivery proof, invoice, dunning)
+       mapped to [0,1] via sigmoid.
 
   3. p_payment        = P(Zahlung tatsächlich erfolgt | judgment won)
-       65 % individual case (50 % ability from LLM web search, 50 % willingness
-             from debtor history) — strongly weighted to the individual
-       35 % Bayesian statistics from comparable past cases
+       50 % ability (LLM web search: insolvency register, company status)
+       50 % willingness (debtor behavioural facts, rule-based)
 
 Final:
   p_cash_success = p_claim_valid × p_claim_provable × p_payment
 
-v3 changes vs v2:
-  - Replaced p_served / p_default / p_win_contested / p_settle / p_collect
-    with three clean pillars (claim_valid, claim_provable, payment)
-  - LLM legal analysis (legal_analyzer.py) drives p_claim_valid
-  - Defendant ability via LLM + optional Tavily web-search (insolvency register)
-  - Willingness from debtor behavioural facts (no LLM needed)
-  - Bayesian rates renamed: valid / provable / payment
-  - Evidence score unchanged (rule-based + LLM-extracted facts)
-  - All weights explicit and documented
+  NN end-blend (optional): weight grows automatically with labelled training data.
+  p_cash_final = (1 - w_nn) × p_cash  +  w_nn × p_nn
+
+v4 changes vs v3:
+  - Bayesian posteriors removed from the scoring calculation entirely.
+    Statistical correction is handled exclusively by the NN end-blend,
+    which learns systematic LLM calibration errors from actual case outcomes.
+  - LLM prompt for p_entstanden sharpened: evidence gaps must NOT lower this score.
+  - LLM prompt for p_durchsetzbar scoped to Verjährung only (ESCP eligibility
+    is confirmed at intake and must not be re-assessed here).
 """
 from __future__ import annotations
 
@@ -40,11 +40,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import (
     Case,
-    CaseEvent,
-    CaseEventType,
     CaseLLMTrace,
     CaseProcessScore,
-    PriorsConfig,
 )
 from .legal_analyzer import (
     LegalValidityResult,
@@ -52,20 +49,6 @@ from .legal_analyzer import (
     analyze_legal_validity,
     analyze_payment_ability,
 )
-
-
-# ---------------------------------------------------------------------------
-# Weights (explicit constants — easy to tune)
-# ---------------------------------------------------------------------------
-
-LEGAL_LLM_WEIGHT   = 0.70   # weight of LLM legal analysis in p_claim_valid
-LEGAL_STAT_WEIGHT  = 0.30
-
-PROVABLE_EV_WEIGHT  = 0.40   # weight of evidence score in p_claim_provable
-PROVABLE_STAT_WEIGHT = 0.60  # statistics more strongly weighted here
-
-PAYMENT_IND_WEIGHT  = 0.65   # weight of individual (ability+willingness) in p_payment
-PAYMENT_STAT_WEIGHT = 0.35
 
 
 # ---------------------------------------------------------------------------
@@ -166,128 +149,7 @@ def score_willingness(facts: dict | None = None) -> float:
 
 
 # ---------------------------------------------------------------------------
-# C) Bayesian updater  (Beta-Binomial)
-# ---------------------------------------------------------------------------
-
-# Priors for the three new rates
-DEFAULT_PRIORS: dict[str, tuple[float, float]] = {
-    "valid":    (6.0, 2.0),   # ~75 % — most filed claims are legally valid
-    "provable": (4.0, 6.0),   # ~40 % — evidence is often weak in cross-border ESCP
-    "payment":  (5.0, 5.0),   # ~50 % — uncertain base rate for actual payment
-}
-
-# Which event types count as success / trial for each rate
-RATE_EVENT_MAP: dict[str, dict] = {
-    "valid": {
-        # A judgment win, default judgment, or settlement means the claim was valid
-        "success": {
-            CaseEventType.JUDGMENT_WIN,
-            CaseEventType.DEFAULT,
-            CaseEventType.SETTLED,
-        },
-        "failure": {CaseEventType.JUDGMENT_LOSS},
-    },
-    "provable": {
-        # Only an adversarial judgment tells us whether the claim was provable
-        # (default judgments don't test evidence)
-        "success": {CaseEventType.JUDGMENT_WIN},
-        "failure": {CaseEventType.JUDGMENT_LOSS},
-    },
-    "payment": {
-        "success": {CaseEventType.PAYMENT_RECEIVED},
-        "failure": {CaseEventType.COLLECTION_FAILED},
-    },
-}
-
-
-@dataclass
-class BayesPosterior:
-    alpha_prior: float
-    beta_prior: float
-    successes: int
-    trials: int
-    alpha_post: float
-    beta_post: float
-    mean: float
-    ci_low: float = 0.0
-    ci_high: float = 1.0
-
-
-def _beta_quantile(alpha: float, beta_param: float, p: float) -> float:
-    """Normal approximation to Beta quantile (avoids scipy dependency)."""
-    if alpha <= 0 or beta_param <= 0:
-        return 0.5
-    mean = alpha / (alpha + beta_param)
-    var = (alpha * beta_param) / ((alpha + beta_param) ** 2 * (alpha + beta_param + 1))
-    std = math.sqrt(var) if var > 0 else 0
-    z = -1.645 if p < 0.5 else 1.645
-    return max(0.0, min(1.0, mean + z * std))
-
-
-def bayes_update(alpha: float, beta_param: float, successes: int, trials: int) -> BayesPosterior:
-    """Beta-Binomial posterior update with 90 % credible interval."""
-    failures = trials - successes
-    a_post = alpha + successes
-    b_post = beta_param + failures
-    mean = a_post / (a_post + b_post) if (a_post + b_post) > 0 else 0.5
-    return BayesPosterior(
-        alpha_prior=alpha,
-        beta_prior=beta_param,
-        successes=successes,
-        trials=trials,
-        alpha_post=a_post,
-        beta_post=b_post,
-        mean=mean,
-        ci_low=round(_beta_quantile(a_post, b_post, 0.05), 4),
-        ci_high=round(_beta_quantile(a_post, b_post, 0.95), 4),
-    )
-
-
-async def get_priors(
-    db: AsyncSession,
-    rate_name: str,
-    claim_subtype: str = "general",
-    country: str = "*",
-) -> tuple[float, float]:
-    """Look up (alpha, beta) from priors_config; fallback to defaults."""
-    for c in [country, "*"]:
-        result = await db.execute(
-            select(PriorsConfig).where(
-                PriorsConfig.rate_name == rate_name,
-                PriorsConfig.claim_subtype == claim_subtype,
-                PriorsConfig.country == c,
-            )
-        )
-        row = result.scalar_one_or_none()
-        if row:
-            return (max(0.01, row.alpha), max(0.01, row.beta))
-    if claim_subtype != "general":
-        return await get_priors(db, rate_name, "general", country)
-    return DEFAULT_PRIORS.get(rate_name, (2.0, 2.0))
-
-
-def count_events(events: list[CaseEvent], rate_name: str) -> tuple[int, int]:
-    """Count (successes, trials) for a rate from the case event log."""
-    mapping = RATE_EVENT_MAP.get(rate_name, {})
-    success_types = mapping.get("success", set())
-    failure_types = mapping.get("failure", set())
-    s = sum(1 for e in events if e.event_type in success_types)
-    f = sum(1 for e in events if e.event_type in failure_types)
-    return s, s + f
-
-
-# ---------------------------------------------------------------------------
-# D) Blending: weighted combination of LLM/evidence and statistics
-# ---------------------------------------------------------------------------
-
-def blend(individual_p: float, stat_p: float, individual_weight: float) -> float:
-    """Linear blend of an individual signal and a statistical prior."""
-    stat_weight = 1.0 - individual_weight
-    return individual_weight * individual_p + stat_weight * stat_p
-
-
-# ---------------------------------------------------------------------------
-# E) Evidence → probability mapping  (logistic sigmoid)
+# C) Evidence → probability mapping  (logistic sigmoid)
 # ---------------------------------------------------------------------------
 
 def evidence_to_prob(score: float, midpoint: float = 50.0, steepness: float = 0.08) -> float:
@@ -296,7 +158,7 @@ def evidence_to_prob(score: float, midpoint: float = 50.0, steepness: float = 0.
 
 
 # ---------------------------------------------------------------------------
-# F) Monotonic fact merging  (True flags never revert to False)
+# D) Monotonic fact merging  (True flags never revert to False)
 # ---------------------------------------------------------------------------
 
 def merge_facts_monotonic(merged: dict, new_facts: dict) -> dict:
@@ -308,7 +170,7 @@ def merge_facts_monotonic(merged: dict, new_facts: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# G) Drivers  (Top-5 human-readable reasons)
+# E) Drivers  (Top-5 human-readable reasons)
 # ---------------------------------------------------------------------------
 
 def compute_drivers(
@@ -316,7 +178,6 @@ def compute_drivers(
     legal: LegalValidityResult,
     ability: PaymentAbilityResult,
     p_willingness: float,
-    posteriors: dict[str, BayesPosterior],
 ) -> list[dict]:
     drivers: list[dict] = []
 
@@ -388,28 +249,18 @@ def compute_drivers(
             "detail": f"Verhaltensbasiert: {p_willingness:.0%}",
         })
 
-    # Statistical priors — low posterior means
-    for rate_name, post in posteriors.items():
-        if post.mean < 0.3:
-            labels = {"valid": "Anspruchs-Gültigkeit", "provable": "Beweisbarkeit", "payment": "Zahlung"}
-            drivers.append({
-                "direction": "negative",
-                "factor": f"Geringe historische {labels.get(rate_name, rate_name)}-Rate",
-                "detail": f"Posterior: {post.mean:.1%} ({post.successes}/{post.trials} vergleichbare Fälle)",
-            })
-
     # Sort: negatives first, limit to 5
     drivers.sort(key=lambda d: (d["direction"] == "positive", -len(d["detail"])))
     return drivers[:5]
 
 
 # ---------------------------------------------------------------------------
-# H) Top-level estimate()
+# F) Top-level estimate()
 # ---------------------------------------------------------------------------
 
 async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
     """
-    Compute v3 process score for a case.
+    Compute v4 process score for a case.
 
     Flow:
       A) Merge LLM-extracted facts (monotonic)
@@ -417,21 +268,11 @@ async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
       C) score_willingness → behavioural p_willingness 0–1
       D) analyze_legal_validity (LLM + optional web search)
       E) analyze_payment_ability (LLM + optional web search)
-      F) Bayesian posteriors for "valid", "provable", "payment"
-      G) Blend all components
-      H) Compute drivers and persist
+      F) Compute pillars directly, NN end-blend as sole statistical correction
+      G) Compute drivers and persist
     """
     # Load case
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one()
-
-    # Load events
-    events = list(
-        (await db.execute(
-            select(CaseEvent)
-            .where(CaseEvent.case_id == case_id)
-            .order_by(CaseEvent.created_at)
-        )).scalars().all()
-    )
 
     # A) Merge extracted LLM facts (monotonic: True flags never revert)
     traces = list(
@@ -446,9 +287,6 @@ async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
         if t.extracted_facts:
             merge_facts_monotonic(merged_facts, t.extracted_facts)
 
-    country      = case.defendant_domicile_country or case.defendant_country or "*"
-    claim_subtype = "general"  # extend per claim type later
-
     # B) Evidence score (rule-based)
     ev = score_evidence(case, merged_facts)
 
@@ -461,49 +299,20 @@ async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
     # E) Payment ability: LLM + optional web search (insolvency register etc.)
     ability = await analyze_payment_ability(case, merged_facts)
 
-    # F) Bayesian posteriors for 3 rates
-    posteriors: dict[str, BayesPosterior] = {}
-    priors_data: dict = {}
-    obs_data: dict = {}
-    post_data: dict = {}
-
-    for rate_name in ["valid", "provable", "payment"]:
-        alpha, beta_param = await get_priors(db, rate_name, claim_subtype, country)
-        s, n = count_events(events, rate_name)
-        post = bayes_update(alpha, beta_param, s, n)
-        posteriors[rate_name] = post
-        priors_data[rate_name] = {"alpha": alpha, "beta": beta_param}
-        obs_data[rate_name]    = {"successes": s, "trials": n}
-        post_data[rate_name]   = {
-            "alpha": post.alpha_post,
-            "beta": post.beta_post,
-            "mean": round(post.mean, 4),
-            "ci_low": post.ci_low,
-            "ci_high": post.ci_high,
-        }
-
-    # G) Blend each pillar
+    # F) Compute pillars — no Bayes, direct signals only
     # ---- Pillar 1: p_claim_valid ----
-    #   70% LLM legal analysis + 30% statistics
-    stat_valid   = posteriors["valid"].mean
-    p_claim_valid = blend(legal.p_claim_valid_llm, stat_valid, LEGAL_LLM_WEIGHT)
-    p_claim_valid = max(0.0, min(1.0, p_claim_valid))
+    #   100% LLM: entstanden × nicht_untergegangen × durchsetzbar
+    p_claim_valid = max(0.0, min(1.0, legal.p_claim_valid_llm))
 
     # ---- Pillar 2: p_claim_provable ----
-    #   40% evidence score (→ sigmoid probability) + 60% statistics
-    p_evidence    = evidence_to_prob(ev.total)
-    stat_provable = posteriors["provable"].mean
-    p_claim_provable = blend(p_evidence, stat_provable, PROVABLE_EV_WEIGHT)
-    p_claim_provable = max(0.0, min(1.0, p_claim_provable))
+    #   100% rule-based evidence score → sigmoid probability
+    p_evidence = evidence_to_prob(ev.total)
+    p_claim_provable = max(0.0, min(1.0, p_evidence))
 
     # ---- Pillar 3: p_payment ----
-    #   Individual component = 50% ability + 50% willingness
-    #   65% individual + 35% statistics
-    p_ability_ind  = ability.ability_score / 100.0
-    p_individual   = 0.5 * p_ability_ind + 0.5 * p_willingness
-    stat_payment   = posteriors["payment"].mean
-    p_payment      = blend(p_individual, stat_payment, PAYMENT_IND_WEIGHT)
-    p_payment      = max(0.0, min(1.0, p_payment))
+    #   50% LLM ability + 50% behavioural willingness
+    p_ability_ind = ability.ability_score / 100.0
+    p_payment     = max(0.0, min(1.0, 0.5 * p_ability_ind + 0.5 * p_willingness))
 
     # Final combined probability (pillar product)
     p_cash = p_claim_valid * p_claim_provable * p_payment
@@ -522,57 +331,47 @@ async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
     except Exception:
         pass  # NN failure must never break scoring
 
-    # H) Drivers
-    drivers = compute_drivers(ev, legal, ability, p_willingness, posteriors)
+    # G) Drivers
+    drivers = compute_drivers(ev, legal, ability, p_willingness)
 
     # Build detailed breakdowns for storage
     legal_validity_json = {
-        "p_entstanden":             legal.p_entstanden,
-        "p_entstanden_reasoning":   legal.p_entstanden_reasoning,
-        "p_not_untergegangen":      legal.p_not_untergegangen,
+        "p_entstanden":                  legal.p_entstanden,
+        "p_entstanden_reasoning":        legal.p_entstanden_reasoning,
+        "p_not_untergegangen":           legal.p_not_untergegangen,
         "p_not_untergegangen_reasoning": legal.p_not_untergegangen_reasoning,
-        "p_durchsetzbar":           legal.p_durchsetzbar,
-        "p_durchsetzbar_reasoning": legal.p_durchsetzbar_reasoning,
-        "p_claim_valid_llm":        legal.p_claim_valid_llm,
-        "applicable_law":           legal.applicable_law,
-        "key_legal_issues":         legal.key_legal_issues,
-        "searches_performed":       legal.searches_performed,
-        "stat_valid":               round(stat_valid, 4),
-        "llm_weight":               LEGAL_LLM_WEIGHT,
-        "stat_weight":              LEGAL_STAT_WEIGHT,
-        "p_claim_valid":            round(p_claim_valid, 4),
+        "p_durchsetzbar":                legal.p_durchsetzbar,
+        "p_durchsetzbar_reasoning":      legal.p_durchsetzbar_reasoning,
+        "p_claim_valid_llm":             legal.p_claim_valid_llm,
+        "applicable_law":                legal.applicable_law,
+        "key_legal_issues":              legal.key_legal_issues,
+        "searches_performed":            legal.searches_performed,
+        "p_claim_valid":                 round(p_claim_valid, 4),
     }
     if legal.error:
         legal_validity_json["error"] = legal.error
 
     provability_json = {
-        "evidence_score":       round(ev.total, 2),
-        "evidence_breakdown":   {
+        "evidence_score":     round(ev.total, 2),
+        "evidence_breakdown": {
             "contract": ev.contract,
             "delivery": ev.delivery,
             "invoice":  ev.invoice,
             "dunning":  ev.dunning,
             "missing":  ev.missing,
         },
-        "p_evidence_sigmoid":   round(p_evidence, 4),
-        "stat_provable":        round(stat_provable, 4),
-        "ev_weight":            PROVABLE_EV_WEIGHT,
-        "stat_weight":          PROVABLE_STAT_WEIGHT,
-        "p_claim_provable":     round(p_claim_provable, 4),
+        "p_evidence_sigmoid": round(p_evidence, 4),
+        "p_claim_provable":   round(p_claim_provable, 4),
     }
 
     payment_json = {
-        "ability_score":        ability.ability_score,
-        "insolvency_risk":      ability.insolvency_risk,
-        "ability_reasoning":    ability.reasoning,
-        "ability_searches":     ability.searches_performed,
-        "p_ability":            round(p_ability_ind, 4),
-        "p_willingness":        round(p_willingness, 4),
-        "p_individual":         round(p_individual, 4),
-        "stat_payment":         round(stat_payment, 4),
-        "ind_weight":           PAYMENT_IND_WEIGHT,
-        "stat_weight":          PAYMENT_STAT_WEIGHT,
-        "p_payment":            round(p_payment, 4),
+        "ability_score":     ability.ability_score,
+        "insolvency_risk":   ability.insolvency_risk,
+        "ability_reasoning": ability.reasoning,
+        "ability_searches":  ability.searches_performed,
+        "p_ability":         round(p_ability_ind, 4),
+        "p_willingness":     round(p_willingness, 4),
+        "p_payment":         round(p_payment, 4),
     }
     if ability.error:
         payment_json["ability_error"] = ability.error
@@ -580,14 +379,13 @@ async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
     # Persist
     score = CaseProcessScore(
         case_id=case_id,
-        # New v3 pillars
         p_claim_valid=round(p_claim_valid, 4),
         p_claim_provable=round(p_claim_provable, 4),
         p_payment=round(p_payment, 4),
         legal_validity_json=legal_validity_json,
         provability_json=provability_json,
         payment_analysis_json=payment_json,
-        # Legacy fields (kept for backward compat, populated from v3 equivalents)
+        # Legacy fields (kept for backward compat)
         evidence_score=ev.total,
         evidence_breakdown={
             "contract": ev.contract,
@@ -598,7 +396,7 @@ async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
         },
         ability_score=ability.ability_score,
         ability_components={
-            "ability_score": ability.ability_score,
+            "ability_score":   ability.ability_score,
             "insolvency_risk": ability.insolvency_risk,
         },
         willingness_score=round(p_willingness * 100, 1),
@@ -606,11 +404,11 @@ async def estimate(case_id: UUID, db: AsyncSession) -> CaseProcessScore:
         p_cash_success=round(p_cash, 4),
         p_nn_prediction=round(p_nn_raw, 4) if p_nn_raw is not None else None,
         nn_prediction_json=nn_pred_json,
-        priors_json=priors_data,
-        posteriors_json=post_data,
-        observations_json=obs_data,
+        priors_json={},
+        posteriors_json={},
+        observations_json={},
         drivers_json=drivers,
-        model_version="v3",
+        model_version="v4",
     )
     db.add(score)
     await db.flush()

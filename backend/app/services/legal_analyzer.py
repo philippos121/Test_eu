@@ -65,28 +65,38 @@ _LEGAL_VALIDITY_SYSTEM = """\
 You are a legal analyst specialising in European civil law and the EU Small Claims
 Procedure (ESCP, Regulation EC 861/2007).
 
-Analyse the case facts below and answer three legal questions using the applicable
-national law for the defendant's domicile (or the court's jurisdiction if specified).
+Analyse the case facts below and answer three independent legal questions using the
+applicable national law for the defendant's domicile (or the court's jurisdiction
+if specified).
 
-Rules:
-- Assess ONLY what is alleged — missing evidence does NOT lower p_entstanden;
-  it lowers provability, which is assessed separately.
-- If no signal of extinguishment exists, set p_not_untergegangen ≥ 0.85.
-- Use web search to verify jurisdiction-specific limitation periods, statutory
-  interest rules, or ESCP eligibility requirements where relevant.
+CRITICAL RULES:
+- p_entstanden assesses ONLY whether the legal elements of the claim are met based
+  on what is ALLEGED. Weak or missing evidence does NOT lower p_entstanden — evidence
+  quality is assessed separately (p_claim_provable). Ask: "If everything alleged is
+  true, did the claim arise?"
+- p_not_untergegangen assesses ONLY rechtsvernichtende Einwendungen (defences that
+  extinguish the claim): payment already made, set-off, rescission for mistake
+  (Irrtum), warranty/Gewährleistung reducing the claim, novation, or insolvency
+  discharge already completed. If no such signal is present, set ≥ 0.85.
+- p_durchsetzbar assesses ONLY rechtshemmende Einreden — primarily whether the
+  limitation period (Verjährung) has expired under applicable law, and whether
+  a lis pendens or res iudicata bar exists. ESCP eligibility (cross-border EU,
+  ≤ 5 000 EUR) is already confirmed at case intake — do NOT re-assess it here.
+  Use web search to verify jurisdiction-specific limitation periods where relevant.
 
 Questions:
 1. p_entstanden  (0–1): Did the claim arise?
    Contract claim → contract formed + claimant performed + payment due?
    Statutory claim → all elements of the norm satisfied?
+   (Score based on allegations only — ignore evidence gaps.)
 
 2. p_not_untergegangen  (0–1): Is the claim still alive?
-   Signals of extinction: payment, set-off, novation, limitation period expired,
-   waiver, insolvency discharge already completed.
+   Rechtsvernichtende Einwendungen only: payment, set-off, Irrtum/rescission,
+   Gewährleistung, novation, completed insolvency discharge, waiver.
 
-3. p_durchsetzbar  (0–1): Is the claim formally enforceable?
-   Court has jurisdiction? ESCP applicable (cross-border EU, ≤ 5 000 EUR)?
-   No lis pendens / res iudicata bar?
+3. p_durchsetzbar  (0–1): Is the claim procedurally enforceable?
+   Assess ONLY: (1) limitation period not yet expired under applicable law,
+   (2) no lis pendens or res iudicata bar. Nothing else.
 
 Respond with a single JSON object (no markdown fences, no extra text):
 {

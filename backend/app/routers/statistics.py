@@ -32,13 +32,71 @@ from ..models import (
     PriorsConfig,
     User,
 )
-from ..services.scoring import (
-    DEFAULT_PRIORS,
-    RATE_EVENT_MAP,
-    bayes_update,
-    count_events,
-    estimate,
-)
+from ..services.scoring import estimate
+
+# ---------------------------------------------------------------------------
+# Bayes utilities — used only for admin statistics display, not for scoring
+# ---------------------------------------------------------------------------
+
+import math as _math
+from dataclasses import dataclass as _dataclass
+
+DEFAULT_PRIORS: dict[str, tuple[float, float]] = {
+    "valid":    (6.0, 2.0),
+    "provable": (4.0, 6.0),
+    "payment":  (5.0, 5.0),
+}
+
+RATE_EVENT_MAP: dict[str, dict] = {
+    "valid": {
+        "success": {CaseEventType.JUDGMENT_WIN, CaseEventType.DEFAULT, CaseEventType.SETTLED},
+        "failure": {CaseEventType.JUDGMENT_LOSS},
+    },
+    "provable": {
+        "success": {CaseEventType.JUDGMENT_WIN},
+        "failure": {CaseEventType.JUDGMENT_LOSS},
+    },
+    "payment": {
+        "success": {CaseEventType.PAYMENT_RECEIVED},
+        "failure": {CaseEventType.COLLECTION_FAILED},
+    },
+}
+
+
+@_dataclass
+class _BayesPosterior:
+    alpha_prior: float; beta_prior: float; successes: int; trials: int
+    alpha_post: float; beta_post: float; mean: float
+    ci_low: float = 0.0; ci_high: float = 1.0
+
+
+def _beta_quantile(a: float, b: float, p: float) -> float:
+    if a <= 0 or b <= 0:
+        return 0.5
+    mu = a / (a + b)
+    var = (a * b) / ((a + b) ** 2 * (a + b + 1))
+    std = _math.sqrt(var) if var > 0 else 0
+    z = -1.645 if p < 0.5 else 1.645
+    return max(0.0, min(1.0, mu + z * std))
+
+
+def bayes_update(alpha: float, beta_param: float, successes: int, trials: int) -> _BayesPosterior:
+    f = trials - successes
+    a, b = alpha + successes, beta_param + f
+    mean = a / (a + b) if (a + b) > 0 else 0.5
+    return _BayesPosterior(
+        alpha_prior=alpha, beta_prior=beta_param, successes=successes, trials=trials,
+        alpha_post=a, beta_post=b, mean=mean,
+        ci_low=round(_beta_quantile(a, b, 0.05), 4),
+        ci_high=round(_beta_quantile(a, b, 0.95), 4),
+    )
+
+
+def count_events(events: list, rate_name: str) -> tuple[int, int]:
+    mapping = RATE_EVENT_MAP.get(rate_name, {})
+    s = sum(1 for e in events if e.event_type in mapping.get("success", set()))
+    f = sum(1 for e in events if e.event_type in mapping.get("failure", set()))
+    return s, s + f
 
 logger = logging.getLogger(__name__)
 
