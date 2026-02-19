@@ -500,10 +500,10 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
+import { useI18nStore } from '../stores/i18n'
 import api from '@/api'
 
-const { t } = useI18n()
+const { t } = useI18nStore()
 
 // State
 const stats = ref({})
