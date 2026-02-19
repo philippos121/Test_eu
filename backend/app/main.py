@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 
-from .auth import hash_password
+from .auth import hash_password, verify_password
 from .config import get_settings
 from .database import async_session, init_db
 from .models import Case, CaseProcessScore, User
@@ -25,18 +25,28 @@ async def _auto_seed() -> None:
     """Ensure a default admin user and demo seed data exist.
 
     Runs on every startup but is fully idempotent:
-    - Skips admin creation if any admin user already exists.
+    - Always guarantees admin@portal.eu / admin1234 is a valid admin login.
     - Skips seeding if [HIST] cases are already present.
     """
     async with async_session() as db:
         try:
-            # ── 1. Find or create a default admin user ──
-            admin_result = await db.execute(
-                select(User).where(User.is_admin == True).limit(1)
+            # ── 1. Guarantee admin@portal.eu exists and is an admin ──
+            # Look up by email so we never hit a unique-constraint collision.
+            result = await db.execute(
+                select(User).where(User.email == DEFAULT_ADMIN_EMAIL)
             )
-            admin_user = admin_result.scalar_one_or_none()
+            admin_user = result.scalar_one_or_none()
 
-            if not admin_user:
+            if admin_user:
+                # Row exists — make sure it has admin rights and the right password.
+                if not admin_user.is_admin or not verify_password(
+                    DEFAULT_ADMIN_PASSWORD, admin_user.hashed_password
+                ):
+                    admin_user.is_admin = True
+                    admin_user.hashed_password = hash_password(DEFAULT_ADMIN_PASSWORD)
+                    logger.info("Auto-seed: updated admin@portal.eu to admin + reset password.")
+            else:
+                # No such user yet — create from scratch.
                 admin_user = User(
                     email=DEFAULT_ADMIN_EMAIL,
                     hashed_password=hash_password(DEFAULT_ADMIN_PASSWORD),
@@ -45,14 +55,15 @@ async def _auto_seed() -> None:
                     is_admin=True,
                 )
                 db.add(admin_user)
-                await db.flush()  # obtain the UUID before inserting cases
+                await db.flush()  # materialise UUID before FK inserts below
                 logger.info(
-                    "Auto-seed: created default admin user (%s / %s)",
+                    "Auto-seed: created admin user  →  %s / %s",
                     DEFAULT_ADMIN_EMAIL,
                     DEFAULT_ADMIN_PASSWORD,
                 )
 
             admin_id = admin_user.id
+            logger.info("Auto-seed: admin login  →  %s / %s", DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASSWORD)
 
             # ── 2. Check whether historical data is already present ──
             hist_count = await db.execute(
