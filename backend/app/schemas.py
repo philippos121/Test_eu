@@ -272,6 +272,14 @@ class LLMTraceRead(BaseModel):
 class ProcessScoreRead(BaseModel):
     id: UUID
     case_id: UUID
+    # v3 pillars
+    p_claim_valid: Optional[float] = None
+    p_claim_provable: Optional[float] = None
+    p_payment: Optional[float] = None
+    legal_validity_json: Optional[dict] = None
+    provability_json: Optional[dict] = None
+    payment_analysis_json: Optional[dict] = None
+    # legacy / evidence
     evidence_score: float
     evidence_breakdown: dict
     ability_score: float
