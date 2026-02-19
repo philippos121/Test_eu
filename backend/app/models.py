@@ -304,11 +304,14 @@ class NNModel(Base):
     train_accuracy = Column(Float, nullable=True)
     val_accuracy = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PriorsConfig(Base):
     """Configurable Beta priors per rate, per claim_subtype + country."""
     __tablename__ = "priors_config"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    rate_name = Column(String(32), nullable=False)  # served, default, settle, collect
+    rate_name = Column(String(32), nullable=False)  # valid, provable, payment
     claim_subtype = Column(String(64), default="general")
     country = Column(String(2), default="*")  # '*' = all countries
     alpha = Column(Float, nullable=False, default=2.0)
