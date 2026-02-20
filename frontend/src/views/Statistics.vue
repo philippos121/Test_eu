@@ -23,38 +23,29 @@
         </div>
       </div>
 
-      <!-- Bayesian Posteriors -->
+      <!-- NN Model Status -->
       <section class="card fade-in mt-3">
-        <h2>{{ t('stats.bayesianLearning') }}</h2>
-        <p class="text-secondary mb-2">{{ t('stats.currentPosteriors') }}</p>
-
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>{{ t('stats.rate') }}</th>
-              <th>{{ t('stats.prior') }} (&alpha;, &beta;)</th>
-              <th>{{ t('stats.observations') }}</th>
-              <th>{{ t('stats.posterior') }} (&alpha;', &beta;')</th>
-              <th>{{ t('stats.mean') }}</th>
-              <th>{{ t('stats.ci') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="rate in posteriors" :key="rate.name">
-              <td><strong>{{ rate.label }}</strong></td>
-              <td>(&alpha;={{ rate.prior_alpha }}, &beta;={{ rate.prior_beta }})</td>
-              <td>{{ rate.successes }} / {{ rate.trials }}</td>
-              <td>(&alpha;'={{ rate.post_alpha.toFixed(1) }}, &beta;'={{ rate.post_beta.toFixed(1) }})</td>
-              <td>
-                <div class="prob-bar-container">
-                  <div class="prob-bar" :style="{ width: (rate.mean * 100) + '%' }"></div>
-                  <span class="prob-bar-label">{{ (rate.mean * 100).toFixed(1) }}%</span>
-                </div>
-              </td>
-              <td class="text-secondary">{{ (rate.ci_low * 100).toFixed(0) }}% - {{ (rate.ci_high * 100).toFixed(0) }}%</td>
-            </tr>
-          </tbody>
-        </table>
+        <h2>{{ t('stats.nnLearning') }}</h2>
+        <p class="text-secondary mb-2">{{ t('stats.nnDescription') }}</p>
+        <div class="nn-info-grid">
+          <div class="nn-info-item">
+            <div class="nn-info-value">{{ stats.completed_cases ?? 0 }}</div>
+            <div class="nn-info-label">{{ t('stats.nnTrainingData') }}</div>
+          </div>
+          <div class="nn-info-item">
+            <div class="nn-info-value">40</div>
+            <div class="nn-info-label">{{ t('stats.nnFeatures') }}</div>
+          </div>
+          <div class="nn-info-item">
+            <div class="nn-info-value">3</div>
+            <div class="nn-info-label">{{ t('stats.nnClasses') }}</div>
+          </div>
+          <div class="nn-info-item">
+            <div class="nn-info-value">&le;30%</div>
+            <div class="nn-info-label">{{ t('stats.nnBlendWeight') }}</div>
+          </div>
+        </div>
+        <p class="text-secondary mt-2" style="font-size:0.82rem">{{ t('stats.nnArchitecture') }}</p>
       </section>
 
       <!-- Recent Completed Cases -->
@@ -94,16 +85,13 @@
       <!-- Seed Button (Admin) -->
       <section class="card fade-in mt-2 mb-3" v-if="auth.user?.is_admin">
         <h2>Admin: Seed-Daten</h2>
-        <p class="text-secondary mb-1">Generiert 5 fiktive abgeschlossene Fälle und 100 historische Beobachtungen für Bayes-Statistik und NN-Training.</p>
+        <p class="text-secondary mb-1">Generiert 5 fiktive abgeschlossene Fälle und 75 historische Trainingsfälle (22 Vollerfolg · 12 Teilerfolg · 26 Misserfolg · 15 Abgelehnt) für das NN-Training (40 Features, 3 Klassen, CCE).</p>
         <div class="flex gap-1">
           <button class="btn btn-primary" @click="seedData(false)" :disabled="seeding">
             {{ seeding ? 'Wird generiert...' : 'Seed-Daten generieren' }}
           </button>
           <button class="btn btn-outline" @click="seedData(true)" :disabled="seeding" title="Löscht bestehende [HIST]-Fälle und erstellt sie neu mit aktuellen Features">
             Historische Daten neu generieren
-          </button>
-          <button class="btn btn-accent" @click="updatePriors" :disabled="updatingPriors">
-            {{ updatingPriors ? 'Wird aktualisiert...' : 'Priors aktualisieren' }}
           </button>
         </div>
         <p v-if="seedMsg" class="mt-1 text-secondary">{{ seedMsg }}</p>
@@ -122,17 +110,14 @@ const auth = useAuthStore()
 const { t } = useI18nStore()
 
 const stats = ref({})
-const posteriors = ref([])
 const completedCases = ref([])
 const seeding = ref(false)
-const updatingPriors = ref(false)
 const seedMsg = ref('')
 
 async function loadStats() {
   try {
     const { data } = await api.get('/statistics/overview')
     stats.value = data
-    posteriors.value = data.posteriors || []
     completedCases.value = data.completed_cases_detail || []
   } catch {
     // Stats endpoint may not exist yet
@@ -151,20 +136,6 @@ async function seedData(force = false) {
     seedMsg.value = 'Fehler: ' + (e.response?.data?.detail || e.message)
   } finally {
     seeding.value = false
-  }
-}
-
-async function updatePriors() {
-  updatingPriors.value = true
-  seedMsg.value = ''
-  try {
-    const { data } = await api.post('/statistics/update-priors')
-    seedMsg.value = data.message || 'Priors aktualisiert!'
-    await loadStats()
-  } catch (e) {
-    seedMsg.value = 'Fehler: ' + (e.response?.data?.detail || e.message)
-  } finally {
-    updatingPriors.value = false
   }
 }
 
@@ -241,4 +212,31 @@ onMounted(loadStats)
 
 .success { color: var(--success); font-weight: 600; }
 .danger { color: var(--danger); font-weight: 600; }
+
+.nn-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.nn-info-item {
+  text-align: center;
+  padding: 20px 12px;
+  background: var(--bg);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.nn-info-value {
+  font-size: 1.75rem;
+  font-weight: 800;
+  color: var(--primary);
+}
+
+.nn-info-label {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
 </style>

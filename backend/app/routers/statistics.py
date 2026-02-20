@@ -830,23 +830,25 @@ def _build_seed_cases(admin_user_id: UUID) -> list[dict]:
 
 
 def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[CaseEvent]]:  # noqa: C901
-    """Generate 100 historical cases with rich, outcome-correlated features for NN training.
+    """Generate 75 historical cases with rich, outcome-correlated features for NN training.
 
-    Outcome distribution (70 cases in NN training set, 30 REJECTED excluded):
-      Group 1  (30) service_fail  → REJECTED, no NN label
-      Group 2  (30) default+collected       → outcome 1.0  (strong evidence, no insolvency)
-      Group 3  ( 5) default+coll.failed     → outcome 0.0  (insolvency, eastern-EU)
-      Group 4  (11) settled+payment         → outcome 0.7  (quality dispute, cross-border)
-      Group 6  (14) win+coll.failed         → outcome 0.0  (insolvency / unreachable)
-      Group 7  (10) judgment_loss           → outcome 0.0  (weak/oral evidence)
+    Outcome distribution (60 NN training cases + 15 REJECTED excluded):
+      Group 1 (15) service_fail  → REJECTED, no NN label
+      Group 2 (22) full_success  → PAYMENT_RECEIVED (class 0)
+      Group 3 ( 6) insolvency    → COLLECTION_FAILED (class 2)
+      Group 4 (12) partial       → SETTLED only, no PAYMENT_RECEIVED (class 1)
+      Group 5 (10) win+coll.fail → COLLECTION_FAILED (class 2)
+      Group 6 (10) judgment_loss → JUDGMENT_LOSS (class 2)
 
-    Each case carries realistic German-language text so that nn_service.extract_features()
-    produces a meaningful 20-dim feature vector correlated with the outcome.
+    Text fields embed keywords for all 40 NN feature dimensions:
+    Anspruchsart (Zahlung/Herausgabe/Schadenersatz), Rechtsgrund (Vertrag/Delikt),
+    B2B/B2C/C2C, Beweise (Vertrag, Lieferschein, Rechnung, Mahnung, GStV),
+    Einwendungen (kein Vertrag, mangelhaft, Verjährung), Insolvenz, Dienstleistung.
+    Year/quarter is spread across 2022-2025 via created_at.
     """
     now = datetime.utcnow()
     all_cases: list[Case] = []
     all_events: list[CaseEvent] = []
-
     case_idx = 0
 
     # ── helpers ──────────────────────────────────────────────────────────────
@@ -866,13 +868,15 @@ def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[Case
         amount: float,
         claimant_legal: bool,
         defendant_legal: bool,
+        claimant_country: str,
         defendant_country: str,
         is_cross_border: bool,
         claim_basis: str,
         claim_evidence: str,
         claim_description: str,
     ) -> Case:
-        claimant_country = "DE"
+        # Spread created_at across ~3 years (case 0 ≈ 2023-01, case 74 ≈ 2025-11)
+        days_back = max(10, 1050 - idx * 14)
         return Case(
             id=uuid.uuid4(),
             user_id=admin_user_id,
@@ -892,85 +896,74 @@ def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[Case
             claim_basis=claim_basis,
             claim_evidence=claim_evidence,
             claim_description=claim_description,
-            created_at=now - timedelta(days=365 - idx),
-            updated_at=now - timedelta(days=30),
+            created_at=now - timedelta(days=days_back),
+            updated_at=now - timedelta(days=max(1, days_back - 60)),
         )
 
-    # ── pre-built text snippets (vary by idx for diversity) ──────────────────
+    def _d(idx: int) -> str:
+        return f"{(idx % 28) + 1:02d}.{(idx % 9) + 1:02d}.202{2 + (idx % 4)}"
 
-    _contracts = [
-        "Kaufvertrag vom {d}, Auftragsbestätigung",
-        "Schriftlicher Kaufvertrag und Bestellbestätigung vom {d}",
-        "Rahmenliefervertrag, Einzelbestellung vom {d}",
-    ]
-    _deliveries = [
-        "Lieferschein mit Empfangsbestätigung, Transportnachweis",
-        "Liefernachweis, Lieferschein Nr. {n}, Empfangsbestätigung",
-        "Lieferschein und Empfangsquittung",
-    ]
-    _invoices = [
-        "Rechnung Nr. {n}, Fälligkeit {d}, Zahlungsziel 30 Tage",
-        "Rechnung über EUR {a} mit Fälligkeitsdatum {d}",
-        "Rechnung Nr. {n} fällig zum {d}",
-    ]
-    _dunnings = [
-        "Mahnung vom {d} mit 14-Tage-Frist, Zahlungserinnerung",
-        "Erste und zweite Mahnung mit Fristsetzung",
-        "Einschreiben-Mahnung vom {d}",
-    ]
+    def _n(idx: int) -> str:
+        return str(1000 + idx)
 
-    def _t(templates: list, idx: int, **kw: str) -> str:
-        tpl = templates[idx % len(templates)]
-        kw.setdefault("d", f"01.0{(idx % 9) + 1}.2024")
-        kw.setdefault("n", str(1000 + idx))
-        kw.setdefault("a", str(int(500 + (idx * 47) % 4500)))
-        return tpl.format(**kw)
+    def _a(idx: int) -> str:
+        return str(int(500 + (idx * 47) % 4500))
 
-    # ── Group 1: service_fail (30) → REJECTED, not in NN training ─────────────
-    _g1_countries = ["FR", "IT", "ES", "BE", "NL", "PL", "CZ"]
-    for _ in range(30):
+    # ── Group 1: service_fail (15) → REJECTED, not in NN training ────────────
+    _g1_cl = ["DE", "DE", "AT", "FR", "IT", "DE", "NL", "DE", "ES", "DE", "AT", "DE", "FR", "DE", "NL"]
+    _g1_df = ["FR", "IT", "ES", "BE", "NL", "PL", "CZ", "RO", "HU", "SK", "BG", "HR", "PT", "GR", "LV"]
+    for i in range(15):
         c = _make(
             case_idx,
             status=CaseStatus.REJECTED,
             amount=round(400 + (case_idx * 53) % 3600, 2),
-            claimant_legal=bool(case_idx % 2),
-            defendant_legal=bool(case_idx % 3),
-            defendant_country=_g1_countries[case_idx % 7],
+            claimant_legal=bool(i % 2),
+            defendant_legal=bool(i % 3),
+            claimant_country=_g1_cl[i],
+            defendant_country=_g1_df[i],
             is_cross_border=True,
-            claim_basis=_t(_contracts, case_idx),
-            claim_evidence=_t(_invoices, case_idx),
+            claim_basis=f"Kaufvertrag vom {_d(case_idx)}, Auftragsbestätigung",
+            claim_evidence=f"Rechnung Nr. {_n(case_idx)}, Fälligkeit {_d(case_idx)}",
             claim_description="Beklagter unter angegebener Adresse nicht erreichbar. Zustellung fehlgeschlagen.",
         )
         all_cases.append(c)
-        all_events.append(_ev(c.id, CaseEventType.FILED, 350 - case_idx))
-        all_events.append(_ev(c.id, CaseEventType.SERVICE_FAIL, 340 - case_idx))
+        all_events += [
+            _ev(c.id, CaseEventType.FILED,        400 - case_idx * 2),
+            _ev(c.id, CaseEventType.SERVICE_FAIL, 390 - case_idx * 2),
+        ]
         case_idx += 1
 
-    # ── Group 2: default → collected (30) → outcome 1.0 ───────────────────────
-    # Strong evidence, domestic or nearby EU, legal persons, small-medium amounts
-    _g2_countries = ["DE", "DE", "AT", "NL", "DE", "AT", "BE", "NL", "DE", "DE"]
-    for i in range(30):
+    # ── Group 2: full_success (22) → PAYMENT_RECEIVED (class 0) ──────────────
+    # Sub-A (8): B2B, DE→DE, Zahlung, Kaufvertrag, full evidence set
+    _g2a_amounts = [850, 1200, 2100, 1650, 975, 3200, 1450, 2750]
+    for i in range(8):
+        has_gstv = i % 4 == 0  # 2 of 8 have Gerichtsstandsvereinbarung
+        basis = (
+            f"Kaufvertrag vom {_d(case_idx)}, Gerichtsstandsvereinbarung zugunsten AG Stuttgart"
+            if has_gstv else
+            f"Schriftlicher Kaufvertrag vom {_d(case_idx)}, Auftragsbestätigung"
+        )
         ev_parts = [
-            _t(_contracts, case_idx),
-            _t(_deliveries, case_idx),
-            _t(_invoices, case_idx),
+            f"Kaufvertrag vom {_d(case_idx)}",
+            f"Lieferschein Nr. {_n(case_idx)} mit Empfangsbestätigung",
+            f"Rechnung Nr. {_n(case_idx)} über EUR {_g2a_amounts[i]}",
+            f"Mahnung vom {_d(case_idx)} mit 14-Tage-Frist",
         ]
-        if i % 3 != 2:   # 20 of 30 also have dunning
-            ev_parts.append(_t(_dunnings, case_idx))
         c = _make(
             case_idx,
             status=CaseStatus.COMPLETED,
-            amount=round(600 + (case_idx * 43) % 2400, 2),
+            amount=_g2a_amounts[i],
             claimant_legal=True,
             defendant_legal=bool(i % 3 != 1),
-            defendant_country=_g2_countries[i % 10],
-            is_cross_border=_g2_countries[i % 10] != "DE",
-            claim_basis=_t(_contracts, case_idx),
+            claimant_country="DE",
+            defendant_country="DE",
+            is_cross_border=False,
+            claim_basis=basis,
             claim_evidence=", ".join(ev_parts),
             claim_description=(
-                f"Lieferung von Waren gemäß Kaufvertrag. "
-                f"Rechnung über EUR {int(600 + (case_idx*43)%2400)} war fällig. "
-                f"Trotz Mahnung keine Zahlung. Beklagter hat nicht reagiert."
+                f"Zahlung aus Kaufvertrag. Lieferung erfolgte am {_d(case_idx)}. "
+                f"Rechnung Nr. {_n(case_idx)} über EUR {_g2a_amounts[i]} blieb unbezahlt. "
+                "Beklagter hat trotz Mahnung und Fristsetzung nicht gezahlt."
             ),
         )
         all_cases.append(c)
@@ -983,144 +976,433 @@ def _build_historical_events(admin_user_id: UUID) -> tuple[list[Case], list[Case
         ]
         case_idx += 1
 
-    # ── Group 3: default → collection_failed (5) → outcome 0.0 ───────────────
-    # Strong evidence but defendant insolvent; Eastern-EU cross-border
-    _g3_countries = ["PL", "CZ", "SK", "HU", "RO"]
+    # Sub-B (5): B2B, cross-border DE→AT/NL/BE, Zahlung, strong evidence
+    _g2b_countries = ["AT", "NL", "BE", "AT", "NL"]
+    _g2b_amounts = [1300, 2200, 1800, 950, 3100]
     for i in range(5):
+        df_cc = _g2b_countries[i]
+        ev_parts = [
+            f"Kaufvertrag vom {_d(case_idx)}",
+            f"Lieferschein Nr. {_n(case_idx)}, Empfangsquittung",
+            f"Rechnung Nr. {_n(case_idx)} über EUR {_g2b_amounts[i]}",
+            f"Einschreiben-Mahnung vom {_d(case_idx)} mit Fristsetzung",
+        ]
         c = _make(
             case_idx,
             status=CaseStatus.COMPLETED,
-            amount=round(2500 + i * 400, 2),
+            amount=_g2b_amounts[i],
             claimant_legal=True,
             defendant_legal=True,
+            claimant_country="DE",
+            defendant_country=df_cc,
+            is_cross_border=True,
+            claim_basis=f"Rahmenliefervertrag, Einzelbestellung vom {_d(case_idx)}",
+            claim_evidence=", ".join(ev_parts),
+            claim_description=(
+                f"Grenzüberschreitende Warenlieferung DE→{df_cc}. "
+                f"Zahlung der Rechnung Nr. {_n(case_idx)} über EUR {_g2b_amounts[i]} ausstehend. "
+                "Beklagte hat trotz zweifacher Mahnung nicht reagiert."
+            ),
+        )
+        all_cases.append(c)
+        all_events += [
+            _ev(c.id, CaseEventType.FILED,            350 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,       338 - case_idx),
+            _ev(c.id, CaseEventType.DEFAULT,          308 - case_idx),
+            _ev(c.id, CaseEventType.JUDGMENT_WIN,     298 - case_idx),
+            _ev(c.id, CaseEventType.PAYMENT_RECEIVED, 265 - case_idx),
+        ]
+        case_idx += 1
+
+    # Sub-C (4): B2B, cross-border DE→FR/IT/ES, Dienstleistung, won default
+    _g2c_countries = ["FR", "IT", "ES", "FR"]
+    _g2c_amounts = [1100, 2400, 1750, 980]
+    for i in range(4):
+        df_cc = _g2c_countries[i]
+        ev_parts = [
+            f"Dienstleistungsvertrag vom {_d(case_idx)}",
+            f"Stundennachweise Zeitraum Q{(case_idx % 4)+1}/202{2+(case_idx%3)}",
+            f"Rechnung Nr. {_n(case_idx)} über EUR {_g2c_amounts[i]}",
+            f"Mahnung mit Fristsetzung vom {_d(case_idx)}",
+        ]
+        c = _make(
+            case_idx,
+            status=CaseStatus.COMPLETED,
+            amount=_g2c_amounts[i],
+            claimant_legal=True,
+            defendant_legal=True,
+            claimant_country="DE",
+            defendant_country=df_cc,
+            is_cross_border=True,
+            claim_basis=f"Dienstleistungsvertrag vom {_d(case_idx)}, E-Mail-Korrespondenz",
+            claim_evidence=", ".join(ev_parts),
+            claim_description=(
+                f"IT-Dienstleistungen und Beratung für Beklagte in {df_cc}. "
+                f"Rechnung Nr. {_n(case_idx)} über EUR {_g2c_amounts[i]} blieb unbezahlt. "
+                "Beklagte reagierte nicht auf Mahnungen. Versäumnisurteil ergangen."
+            ),
+        )
+        all_cases.append(c)
+        all_events += [
+            _ev(c.id, CaseEventType.FILED,            345 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,       330 - case_idx),
+            _ev(c.id, CaseEventType.DEFAULT,          300 - case_idx),
+            _ev(c.id, CaseEventType.JUDGMENT_WIN,     290 - case_idx),
+            _ev(c.id, CaseEventType.PAYMENT_RECEIVED, 255 - case_idx),
+        ]
+        case_idx += 1
+
+    # Sub-D (3): B2C (legal→private), DE→DE, Zahlung, Kaufvertrag
+    _g2d_amounts = [650, 480, 820]
+    for i in range(3):
+        ev_parts = [
+            f"Kaufvertrag vom {_d(case_idx)}",
+            f"Lieferschein Nr. {_n(case_idx)}",
+            f"Rechnung Nr. {_n(case_idx)} über EUR {_g2d_amounts[i]}",
+            f"Mahnung vom {_d(case_idx)}",
+        ]
+        c = _make(
+            case_idx,
+            status=CaseStatus.COMPLETED,
+            amount=_g2d_amounts[i],
+            claimant_legal=True,
+            defendant_legal=False,
+            claimant_country="DE",
+            defendant_country="DE",
+            is_cross_border=False,
+            claim_basis=f"Kaufvertrag vom {_d(case_idx)}",
+            claim_evidence=", ".join(ev_parts),
+            claim_description=(
+                f"Kaufpreiszahlung ausstehend. Beklagter (Privatperson) hat Ware erhalten, "
+                f"Rechnung Nr. {_n(case_idx)} jedoch nicht beglichen. Mahnung blieb ohne Reaktion."
+            ),
+        )
+        all_cases.append(c)
+        all_events += [
+            _ev(c.id, CaseEventType.FILED,            340 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,       330 - case_idx),
+            _ev(c.id, CaseEventType.DEFAULT,          300 - case_idx),
+            _ev(c.id, CaseEventType.JUDGMENT_WIN,     290 - case_idx),
+            _ev(c.id, CaseEventType.PAYMENT_RECEIVED, 260 - case_idx),
+        ]
+        case_idx += 1
+
+    # Sub-E (2): B2B, Herausgabe + Kaufvertrag, won
+    for i in range(2):
+        ev_parts = [
+            f"Kaufvertrag vom {_d(case_idx)}, Eigentumsvorbehaltsklausel",
+            f"Lieferschein Nr. {_n(case_idx)}",
+            f"Mahnung auf Herausgabe vom {_d(case_idx)}",
+        ]
+        c = _make(
+            case_idx,
+            status=CaseStatus.COMPLETED,
+            amount=round(900 + i * 600, 2),
+            claimant_legal=True,
+            defendant_legal=True,
+            claimant_country="DE",
+            defendant_country=["AT", "NL"][i],
+            is_cross_border=True,
+            claim_basis=f"Kaufvertrag mit Eigentumsvorbehalt vom {_d(case_idx)}",
+            claim_evidence=", ".join(ev_parts),
+            claim_description=(
+                "Herausgabe der gelieferten Waren verlangt (Eigentumsvorbehalt). "
+                "Kaufpreis nicht beglichen. Beklagter verweigert Rückgabe. "
+                "Herausgabeanspruch aus Kaufvertrag mit Eigentumsvorbehalt."
+            ),
+        )
+        all_cases.append(c)
+        all_events += [
+            _ev(c.id, CaseEventType.FILED,            335 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,       325 - case_idx),
+            _ev(c.id, CaseEventType.DEFAULT,          295 - case_idx),
+            _ev(c.id, CaseEventType.JUDGMENT_WIN,     285 - case_idx),
+            _ev(c.id, CaseEventType.PAYMENT_RECEIVED, 250 - case_idx),
+        ]
+        case_idx += 1
+
+    # ── Group 3: insolvency → COLLECTION_FAILED (6) → class 2 ────────────────
+    # Strong evidence, eastern-EU defendants, Insolvenz keyword
+    _g3_countries = ["PL", "CZ", "SK", "HU", "RO", "BG"]
+    _g3_amounts = [2800, 3400, 1900, 4200, 2600, 3100]
+    for i in range(6):
+        ev_parts = [
+            f"Kaufvertrag vom {_d(case_idx)}, Auftragsbestätigung",
+            f"Lieferschein Nr. {_n(case_idx)} mit Empfangsbestätigung",
+            f"Rechnung Nr. {_n(case_idx)} über EUR {_g3_amounts[i]}",
+            f"Erste und zweite Mahnung mit Fristsetzung",
+        ]
+        c = _make(
+            case_idx,
+            status=CaseStatus.COMPLETED,
+            amount=_g3_amounts[i],
+            claimant_legal=True,
+            defendant_legal=True,
+            claimant_country="DE",
             defendant_country=_g3_countries[i],
             is_cross_border=True,
-            claim_basis=_t(_contracts, case_idx),
-            claim_evidence=", ".join([
-                _t(_contracts, case_idx),
-                _t(_deliveries, case_idx),
-                _t(_invoices, case_idx),
-                _t(_dunnings, case_idx),
-            ]),
+            claim_basis=f"Kaufvertrag vom {_d(case_idx)}, Auftragsbestätigung",
+            claim_evidence=", ".join(ev_parts),
             claim_description=(
                 "Vollständige Dokumentation vorhanden. "
                 "Beklagter hat Insolvenzverfahren angemeldet. "
                 "Insolvenzbekanntmachung im Handelsregister eingetragen. "
-                "Vollstreckung im Ausland wegen Insolvenz gescheitert."
+                "Vollstreckung im Ausland wegen Insolvenz gescheitert. "
+                "Forderung zur Insolvenztabelle angemeldet."
             ),
         )
         all_cases.append(c)
         all_events += [
-            _ev(c.id, CaseEventType.FILED,             350 - case_idx),
-            _ev(c.id, CaseEventType.SERVICE_OK,        340 - case_idx),
-            _ev(c.id, CaseEventType.DEFAULT,           310 - case_idx),
-            _ev(c.id, CaseEventType.JUDGMENT_WIN,      300 - case_idx),
-            _ev(c.id, CaseEventType.COLLECTION_FAILED, 270 - case_idx),
+            _ev(c.id, CaseEventType.FILED,             320 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,        308 - case_idx),
+            _ev(c.id, CaseEventType.DEFAULT,           278 - case_idx),
+            _ev(c.id, CaseEventType.JUDGMENT_WIN,      268 - case_idx),
+            _ev(c.id, CaseEventType.COLLECTION_FAILED, 230 - case_idx),
         ]
         case_idx += 1
 
-    # ── Group 4: settled + payment (11) → outcome 0.7 (SETTLED) / 1.0 ─────────
-    # Quality disputes, cross-border IT/FR/ES; medium evidence
-    _g4_countries = ["IT", "FR", "ES", "IT", "FR", "IT", "ES", "FR", "IT", "FR", "ES"]
-    for i in range(11):
-        has_dunning = i % 3 != 0
-        ev_parts = [_t(_contracts, case_idx), _t(_invoices, case_idx)]
-        if i % 2 == 0:
-            ev_parts.append(_t(_deliveries, case_idx))
-        if has_dunning:
-            ev_parts.append(_t(_dunnings, case_idx))
+    # ── Group 4: partial_success → SETTLED only (12) → class 1 ───────────────
+    # SETTLED without PAYMENT_RECEIVED → class 1
+    # Sub-A (8): quality dispute (mangelhaft), cross-border
+    _g4a_countries = ["IT", "FR", "ES", "IT", "FR", "ES", "PT", "IT"]
+    _g4a_amounts = [1600, 2200, 1350, 3000, 1900, 2600, 1100, 2800]
+    for i in range(8):
+        has_delivery = i % 2 == 0
+        ev_parts = [f"Kaufvertrag vom {_d(case_idx)}", f"Rechnung Nr. {_n(case_idx)}"]
+        if has_delivery:
+            ev_parts.append(f"Lieferschein Nr. {_n(case_idx)}")
+        ev_parts.append(f"Mahnung vom {_d(case_idx)}")
         c = _make(
             case_idx,
             status=CaseStatus.COMPLETED,
-            amount=round(1200 + (case_idx * 61) % 2800, 2),
+            amount=_g4a_amounts[i],
             claimant_legal=True,
             defendant_legal=bool(i % 2),
-            defendant_country=_g4_countries[i],
+            claimant_country="DE",
+            defendant_country=_g4a_countries[i],
             is_cross_border=True,
-            claim_basis=_t(_contracts, case_idx),
+            claim_basis=f"Kaufvertrag vom {_d(case_idx)}",
             claim_evidence=", ".join(ev_parts),
             claim_description=(
-                "Beklagter beanstandet die Qualität der gelieferten Waren. "
-                "Klägerin bestreitet Qualitätsmängel. "
-                "Vergleich erzielt: Zahlung eines Teilbetrages vereinbart."
+                "Beklagter beanstandet die Qualität der gelieferten Waren — mangelhaft erfüllt. "
+                "Qualitätsmängel werden geltend gemacht, Klägerin bestreitet die Mängelrüge. "
+                "Vergleich erzielt: Zahlung eines reduzierten Betrages vereinbart (Teilerfolg)."
             ),
         )
         all_cases.append(c)
         all_events += [
-            _ev(c.id, CaseEventType.FILED,                350 - case_idx),
-            _ev(c.id, CaseEventType.SERVICE_OK,           340 - case_idx),
-            _ev(c.id, CaseEventType.DEFENDANT_RESPONDED,  320 - case_idx),
-            _ev(c.id, CaseEventType.SETTLED,              300 - case_idx),
-            _ev(c.id, CaseEventType.PAYMENT_RECEIVED,     280 - case_idx),
+            _ev(c.id, CaseEventType.FILED,               310 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,          298 - case_idx),
+            _ev(c.id, CaseEventType.DEFENDANT_RESPONDED, 275 - case_idx),
+            _ev(c.id, CaseEventType.SETTLED,             250 - case_idx),
+            # No PAYMENT_RECEIVED → class 1
         ]
         case_idx += 1
 
-    # ── Group 6: win → collection_failed (14) → outcome 0.0 ──────────────────
-    # Mix: insolvency (8) + unreachable after judgment (6)
-    _g6_countries = ["CZ", "PL", "HU", "RO", "SK", "BG", "FR", "IT", "ES", "PT", "GR", "HR", "CY", "LV"]
-    for i in range(14):
-        has_insolvency = i < 8
-        desc = (
-            "Beklagter insolvent. Insolvenzverfahren eröffnet, Forderung zur Insolvenztabelle angemeldet. "
-            "Vollstreckung mangels vollstreckbarem Vermögen eingestellt."
-            if has_insolvency else
-            "Urteil erwirkt. Vollstreckung im Ausland nicht erfolgreich. "
-            "Beklagter hat kein pfändbares Vermögen im Inland. Vollstreckung eingestellt."
-        )
-        ev_parts = [_t(_contracts, case_idx), _t(_invoices, case_idx)]
-        if i % 2 == 0:
-            ev_parts.append(_t(_deliveries, case_idx))
-        ev_parts.append(_t(_dunnings, case_idx))
+    # Sub-B (4): Schadenersatz / außervertraglicher Schaden, settled
+    _g4b_countries = ["IT", "FR", "ES", "NL"]
+    _g4b_amounts = [1400, 2000, 1750, 1250]
+    for i in range(4):
+        ev_parts = [
+            f"Werkvertrag vom {_d(case_idx)}",
+            f"Schadensdokumentation vom {_d(case_idx)}",
+            f"Rechnung Nr. {_n(case_idx)} über Schadenersatz",
+        ]
         c = _make(
             case_idx,
             status=CaseStatus.COMPLETED,
-            amount=round(1800 + (case_idx * 37) % 3200, 2),
-            claimant_legal=True,
+            amount=_g4b_amounts[i],
+            claimant_legal=bool(i % 2),
             defendant_legal=bool(i % 3 != 1),
-            defendant_country=_g6_countries[i],
+            claimant_country=["DE", "AT", "FR", "DE"][i],
+            defendant_country=_g4b_countries[i],
             is_cross_border=True,
-            claim_basis=_t(_contracts, case_idx),
+            claim_basis=f"Außervertraglicher Schadenersatzanspruch, Werkvertrag vom {_d(case_idx)}",
             claim_evidence=", ".join(ev_parts),
-            claim_description=desc,
+            claim_description=(
+                "Schadenersatz wegen mangelhafter Werkleistung. "
+                "Beklagter hat Werkleistung nicht erfüllt bzw. mangelhaft erbracht. "
+                "Schaden entstanden durch Nichterfüllung vertraglicher Pflichten. "
+                "Vergleich: Teilbetrag als Schadenersatz anerkannt."
+            ),
         )
         all_cases.append(c)
         all_events += [
-            _ev(c.id, CaseEventType.FILED,                350 - case_idx),
-            _ev(c.id, CaseEventType.SERVICE_OK,           340 - case_idx),
-            _ev(c.id, CaseEventType.DEFENDANT_RESPONDED,  320 - case_idx),
-            _ev(c.id, CaseEventType.JUDGMENT_WIN,         290 - case_idx),
-            _ev(c.id, CaseEventType.COLLECTION_FAILED,    260 - case_idx),
+            _ev(c.id, CaseEventType.FILED,               305 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,          292 - case_idx),
+            _ev(c.id, CaseEventType.DEFENDANT_RESPONDED, 268 - case_idx),
+            _ev(c.id, CaseEventType.SETTLED,             244 - case_idx),
+            # No PAYMENT_RECEIVED → class 1
         ]
         case_idx += 1
 
-    # ── Group 7: judgment_loss (10) → outcome 0.0 ──────────────────────────────
-    # Weak/oral-only evidence; defendant contests successfully
-    _g7_amounts = [350, 500, 750, 800, 400, 650, 550, 900, 480, 720]
-    _g7_countries = ["DE", "AT", "DE", "NL", "DE", "AT", "BE", "DE", "AT", "DE"]
-    for i in range(10):
+    # ── Group 5: win → COLLECTION_FAILED (10) → class 2 ──────────────────────
+    # Sub-A (5): insolvency
+    _g5a_countries = ["CZ", "PL", "HU", "RO", "SK"]
+    _g5a_amounts = [2100, 3500, 1850, 4000, 2700]
+    for i in range(5):
+        ev_parts = [
+            f"Kaufvertrag vom {_d(case_idx)}",
+            f"Lieferschein Nr. {_n(case_idx)}",
+            f"Rechnung Nr. {_n(case_idx)}",
+            f"Mahnung mit Fristsetzung vom {_d(case_idx)}",
+        ]
         c = _make(
             case_idx,
             status=CaseStatus.COMPLETED,
-            amount=_g7_amounts[i],
+            amount=_g5a_amounts[i],
+            claimant_legal=True,
+            defendant_legal=True,
+            claimant_country="DE",
+            defendant_country=_g5a_countries[i],
+            is_cross_border=True,
+            claim_basis=f"Kaufvertrag vom {_d(case_idx)}",
+            claim_evidence=", ".join(ev_parts),
+            claim_description=(
+                "Urteil gewonnen. Beklagter hat Insolvenz angemeldet. "
+                "Insolvenzverfahren eröffnet, Forderung zur Insolvenztabelle angemeldet. "
+                "Vollstreckung mangels vollstreckbarem Vermögen eingestellt."
+            ),
+        )
+        all_cases.append(c)
+        all_events += [
+            _ev(c.id, CaseEventType.FILED,                290 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,           278 - case_idx),
+            _ev(c.id, CaseEventType.DEFENDANT_RESPONDED,  255 - case_idx),
+            _ev(c.id, CaseEventType.JUDGMENT_WIN,         228 - case_idx),
+            _ev(c.id, CaseEventType.COLLECTION_FAILED,    195 - case_idx),
+        ]
+        case_idx += 1
+
+    # Sub-B (5): no attachable assets, various EU
+    _g5b_countries = ["FR", "IT", "ES", "PT", "GR"]
+    _g5b_amounts = [1700, 2900, 2300, 1600, 3200]
+    for i in range(5):
+        ev_parts = [
+            f"Kaufvertrag vom {_d(case_idx)}",
+            f"Lieferschein Nr. {_n(case_idx)}",
+            f"Rechnung Nr. {_n(case_idx)}",
+        ]
+        c = _make(
+            case_idx,
+            status=CaseStatus.COMPLETED,
+            amount=_g5b_amounts[i],
+            claimant_legal=True,
+            defendant_legal=bool(i % 2),
+            claimant_country="DE",
+            defendant_country=_g5b_countries[i],
+            is_cross_border=True,
+            claim_basis=f"Kaufvertrag vom {_d(case_idx)}",
+            claim_evidence=", ".join(ev_parts),
+            claim_description=(
+                "Urteil erwirkt. Vollstreckung im Ausland nicht erfolgreich. "
+                "Beklagter hat kein pfändbares Vermögen im Inland nachgewiesen. "
+                "Vollstreckung eingestellt. Forderungsausfall."
+            ),
+        )
+        all_cases.append(c)
+        all_events += [
+            _ev(c.id, CaseEventType.FILED,                285 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,           272 - case_idx),
+            _ev(c.id, CaseEventType.DEFENDANT_RESPONDED,  249 - case_idx),
+            _ev(c.id, CaseEventType.JUDGMENT_WIN,         222 - case_idx),
+            _ev(c.id, CaseEventType.COLLECTION_FAILED,    188 - case_idx),
+        ]
+        case_idx += 1
+
+    # ── Group 6: JUDGMENT_LOSS (10) → class 2 ────────────────────────────────
+    # Sub-A (5): no contract / oral only (kein Vertrag defense)
+    _g6a_countries = ["DE", "AT", "DE", "NL", "DE"]
+    _g6a_amounts = [420, 680, 550, 780, 390]
+    for i in range(5):
+        c = _make(
+            case_idx,
+            status=CaseStatus.COMPLETED,
+            amount=_g6a_amounts[i],
             claimant_legal=bool(i % 3 == 0),
             defendant_legal=False,
-            defendant_country=_g7_countries[i],
-            is_cross_border=_g7_countries[i] != "DE",
+            claimant_country="DE",
+            defendant_country=_g6a_countries[i],
+            is_cross_border=_g6a_countries[i] != "DE",
             claim_basis="Mündliche Vereinbarung, keine schriftlichen Unterlagen",
             claim_evidence="Keine schriftlichen Nachweise vorhanden. Zeugenaussagen.",
             claim_description=(
-                "Mündlich vereinbarte Leistung. Kein schriftlicher Vertrag abgeschlossen. "
-                "Keine Dokumentation der erbrachten Leistung. "
-                "Beklagter bestreitet das Zustandekommen eines Vertrages. "
-                "Qualitätsmangel geltend gemacht."
+                "Mündlich vereinbarte Leistung ohne schriftlichen Vertrag. "
+                "Beklagter bestreitet das Zustandekommen eines Vertrages — kein Vertrag abgeschlossen. "
+                "Keine Dokumentation der erbrachten Leistung vorhanden. "
+                "Klage abgewiesen mangels Nachweises."
             ),
         )
         all_cases.append(c)
         all_events += [
-            _ev(c.id, CaseEventType.FILED,                350 - case_idx),
-            _ev(c.id, CaseEventType.SERVICE_OK,           340 - case_idx),
-            _ev(c.id, CaseEventType.DEFENDANT_RESPONDED,  320 - case_idx),
-            _ev(c.id, CaseEventType.JUDGMENT_LOSS,        290 - case_idx),
+            _ev(c.id, CaseEventType.FILED,                280 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,           268 - case_idx),
+            _ev(c.id, CaseEventType.DEFENDANT_RESPONDED,  245 - case_idx),
+            _ev(c.id, CaseEventType.JUDGMENT_LOSS,        215 - case_idx),
+        ]
+        case_idx += 1
+
+    # Sub-B (3): mangelhaft + insufficient evidence
+    _g6b_countries = ["DE", "AT", "BE"]
+    _g6b_amounts = [950, 720, 1100]
+    for i in range(3):
+        c = _make(
+            case_idx,
+            status=CaseStatus.COMPLETED,
+            amount=_g6b_amounts[i],
+            claimant_legal=bool(i % 2),
+            defendant_legal=True,
+            claimant_country="DE",
+            defendant_country=_g6b_countries[i],
+            is_cross_border=_g6b_countries[i] != "DE",
+            claim_basis=f"Kaufvertrag mündlich, Rechnung Nr. {_n(case_idx)}",
+            claim_evidence=f"Rechnung Nr. {_n(case_idx)}, keine weiteren Nachweise",
+            claim_description=(
+                "Beklagter macht Qualitätsmängel der gelieferten Ware geltend — mangelhaft erfüllt. "
+                "Mängelrüge: Ware entspricht nicht der vereinbarten Beschaffenheit. "
+                "Klägerin kann Mängelfreiheit nicht nachweisen. "
+                "Gericht folgt der Einwendung: Klage abgewiesen."
+            ),
+        )
+        all_cases.append(c)
+        all_events += [
+            _ev(c.id, CaseEventType.FILED,                275 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,           263 - case_idx),
+            _ev(c.id, CaseEventType.DEFENDANT_RESPONDED,  240 - case_idx),
+            _ev(c.id, CaseEventType.JUDGMENT_LOSS,        210 - case_idx),
+        ]
+        case_idx += 1
+
+    # Sub-C (2): Verjährung defense
+    _g6c_amounts = [840, 1300]
+    for i in range(2):
+        ev_parts = [
+            f"Kaufvertrag vom {_d(case_idx)} (alt)",
+            f"Rechnung Nr. {_n(case_idx)} (über 3 Jahre alt)",
+        ]
+        c = _make(
+            case_idx,
+            status=CaseStatus.COMPLETED,
+            amount=_g6c_amounts[i],
+            claimant_legal=True,
+            defendant_legal=bool(i),
+            claimant_country="DE",
+            defendant_country=["DE", "AT"][i],
+            is_cross_border=bool(i),
+            claim_basis=f"Kaufvertrag vom {_d(case_idx)}",
+            claim_evidence=", ".join(ev_parts),
+            claim_description=(
+                "Forderung aus Kaufvertrag. Beklagter erhebt Einrede der Verjährung. "
+                "Verjährung gemäß § 195 BGB (3 Jahre) eingetreten. "
+                "Klage wegen Verjährung abgewiesen."
+            ),
+        )
+        all_cases.append(c)
+        all_events += [
+            _ev(c.id, CaseEventType.FILED,                270 - case_idx),
+            _ev(c.id, CaseEventType.SERVICE_OK,           258 - case_idx),
+            _ev(c.id, CaseEventType.DEFENDANT_RESPONDED,  235 - case_idx),
+            _ev(c.id, CaseEventType.JUDGMENT_LOSS,        205 - case_idx),
         ]
         case_idx += 1
 
@@ -1133,7 +1415,7 @@ async def seed_demo_data(
     db: AsyncSession = Depends(get_db),
     force: bool = Query(False, description="Delete existing [HIST] cases and re-seed with fresh rich data"),
 ):
-    """Seed 5 fictional completed cases + 100 historical observation cases.
+    """Seed 5 fictional completed cases + 75 historical observation cases for NN training.
 
     Idempotent by default: skips cases whose title already exists and skips
     historical seeding if ``[HIST]`` cases are already present.
@@ -1228,7 +1510,7 @@ async def seed_demo_data(
         if historical_event_count == -1:
             msg += " Historische Daten waren bereits vorhanden (kein force)."
         else:
-            msg += f" {historical_event_count} historische Events aus 100 Fällen erstellt."
+            msg += f" {historical_event_count} historische Events aus 75 Fällen erstellt."
 
         return SeedResponse(
             fictional_cases_created=fictional_count,

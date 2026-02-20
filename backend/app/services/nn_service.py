@@ -1,13 +1,22 @@
-"""Pure-NumPy Mini Neural Network for case outcome prediction.
+"""Pure-NumPy Mini Neural Network for ESCP case outcome prediction.
 
-Architecture : Input(20) → Dense(16, ReLU) → Dense(8, ReLU) → Dense(1, Sigmoid)
-Loss         : Binary cross-entropy with L2 regularisation
+Architecture : Input(40) → Dense(32, ReLU) → Dense(16, ReLU) → Dense(3, Softmax)
+Loss         : Categorical cross-entropy (3 classes)
 Optimizer    : Adam (β₁=0.9, β₂=0.999, ε=1e-8)
+
+Output classes:
+  0 — full_success   : Judgment won, payment received in full
+  1 — partial_success: Settled (with or without full payment)
+  2 — failure        : Judgment lost, collection failed, or service failed
+
+Blend into scoring pipeline:
+  p_cash_nn = P[0] + 0.5 × P[1]     (expected weighted recovery)
 """
 from __future__ import annotations
 
 import math
 import uuid
+from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
@@ -18,139 +27,295 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models import Case, CaseEvent, CaseEventType, CaseStatus, NNModel
 
 # ---------------------------------------------------------------------------
-# Feature engineering
+# Feature definitions  (40 features)
 # ---------------------------------------------------------------------------
 
 FEATURE_NAMES: list[str] = [
-    "log_claim_amount",    # log10(amount/1000) clipped to [-2, 2]
-    "is_cross_border",
-    "claimant_is_legal",
-    "defendant_is_legal",
-    "has_contract",        # keyword match in evidence/description
-    "has_delivery",
-    "has_invoice",
-    "has_dunning",
-    "evidence_count",      # 0-4 evidence types, normalised to 0-1
-    "def_country_de",
-    "def_country_fr",
-    "def_country_it",
-    "def_country_ee_pl_cz",  # eastern EU
-    "def_country_other_eu",
-    "claim_lt_2000",       # small claim < 2 000 EUR
-    "claim_2k_5k",         # medium claim 2 000–5 000 EUR
-    "claim_gt_5k",         # large claim > 5 000 EUR
-    "has_quality_dispute",
-    "has_insolvency",
-    "is_services",         # service contract (not goods)
+    # Block A — Claim (6)
+    "log_claim_amount",        # log10(amount/1000), clipped [-2, 2]
+    "claim_type_zahlung",      # Zahlungsklage
+    "claim_type_herausgabe",   # Herausgabeklage
+    "claim_type_schadenersatz",# Schadensersatzklage
+    "rechtsgrund_vertrag",     # vertraglicher Anspruch
+    "rechtsgrund_delikt",      # außervertraglicher Schadensersatz
+    # Block B — Parties (5)
+    "claimant_is_legal",       # Kläger juristische Person
+    "defendant_is_legal",      # Beklagter juristische Person
+    "is_b2b",                  # beide juristische Personen
+    "is_b2c",                  # Kläger juristisch, Beklagter natürlich
+    "is_cross_border",         # grenzüberschreitend
+    # Block C — Kläger-Land (4)
+    "claimant_dach",           # DE, AT
+    "claimant_fr_be_lu",       # FR, BE, LU
+    "claimant_it_es_pt",       # IT, ES, PT
+    "claimant_eastern_eu",     # PL, CZ, SK, HU, RO, BG, EE, LT, LV, HR
+    # Block D — Beklagter-Land (5)
+    "defendant_de_at",         # DE, AT
+    "defendant_fr_be",         # FR, BE, LU
+    "defendant_it_es_pt",      # IT, ES, PT
+    "defendant_eastern_eu",    # PL, CZ, SK, HU, RO, BG, EE, LT, LV, HR
+    "defendant_other_eu",      # NL, SE, DK, FI, IE, GR, CY, MT, SI
+    # Block E — Zeit (3)
+    "year_norm",               # (Jahr - 2020) / 10, geclippt [0, 1]
+    "quarter_h1",              # Q1 oder Q2
+    "quarter_q4",              # Q4
+    # Block F — Beweise (5)
+    "has_contract",            # schriftlicher Vertrag vorhanden
+    "has_delivery_proof",      # Liefer-/Leistungsnachweis
+    "has_invoice",             # Rechnung vorhanden
+    "has_dunning",             # Mahnung/Fristsetzung
+    "has_jurisdiction_agr",    # Gerichtsstandsvereinbarung
+    # Block G — Schuldnersituation (2)
+    "has_insolvency",          # Insolvenzrisiko
+    "has_quality_dispute",     # Qualitätsstreit / Mängel
+    # Block H — Einwendungen (9)
+    "defense_no_contract",     # kein Vertrag (bestreitet Vertragsschluss)
+    "defense_not_fulfilled",   # Vertrag nicht erfüllt
+    "defense_defective",       # mangelhafte Erfüllung
+    "defense_irrtum",          # Irrtum / mistake
+    "defense_no_damage",       # kein Schaden
+    "defense_no_causation",    # keine Kausalität
+    "defense_no_fault",        # kein Verschulden
+    "defense_verjährung",      # Verjährung / limitation
+    "defense_set_off",         # Aufrechnung / set-off
+    # Block I — Sonstiges (1)
+    "is_services",             # Dienstleistungsvertrag (nicht Warenlieferung)
 ]
 
-INPUT_DIM   = len(FEATURE_NAMES)   # 20
-HIDDEN_DIMS = [16, 8]
-ARCHITECTURE = {"input": INPUT_DIM, "hidden": HIDDEN_DIMS, "output": 1}
+INPUT_DIM    = len(FEATURE_NAMES)   # 40
+HIDDEN_DIMS  = [32, 16]
+OUTPUT_DIM   = 3                    # full_success, partial_success, failure
+ARCHITECTURE = {"input": INPUT_DIM, "hidden": HIDDEN_DIMS, "output": OUTPUT_DIM}
+
+# Outcome class labels
+OUTCOME_FULL    = 0   # Vollerfolg: Urteil + volle Zahlung
+OUTCOME_PARTIAL = 1   # Teilerfolg: Vergleich / Teilzahlung
+OUTCOME_FAILURE = 2   # Misserfolg: Abweisung / Vollstreckungsversagen
 
 _EU_EASTERN = {"PL", "CZ", "SK", "HU", "RO", "BG", "EE", "LT", "LV", "HR"}
-_EU_ALL = {
-    "AT","BE","BG","CY","CZ","DE","DK","EE","ES","FI","FR","GR","HR","HU",
-    "IE","IT","LT","LU","LV","MT","NL","PL","PT","RO","SE","SI","SK",
-}
+_EU_DACH    = {"DE", "AT"}
+_EU_FR_BE   = {"FR", "BE", "LU"}
+_EU_IT_ES   = {"IT", "ES", "PT"}
+_EU_OTHER   = {"NL", "SE", "DK", "FI", "IE", "GR", "CY", "MT", "SI", "CH"}
 
 
 def extract_features(case: Case) -> np.ndarray:
-    """Extract a normalised 20-dim feature vector from a Case ORM object."""
+    """Extract a normalised 40-dim feature vector from a Case ORM object."""
     amount = case.claim_amount or 0.0
     log_amount = float(np.clip(math.log10(max(amount, 1.0) / 1000.0), -2.0, 2.0))
 
     text = " ".join(filter(None, [
-        (case.claim_evidence or ""),
-        (case.claim_basis    or ""),
+        (case.claim_evidence    or ""),
+        (case.claim_basis       or ""),
         (case.claim_description or ""),
+        (getattr(case, "assessment_summary", None) or ""),
     ])).lower()
 
-    has_contract  = 1.0 if any(w in text for w in
-        ["vertrag", "contract", "auftrag", "kaufvertrag", "bestellung"]) else 0.0
-    has_delivery  = 1.0 if any(w in text for w in
-        ["lieferschein", "delivery", "liefernachweis", "lieferung", "empfangsbestätigung"]) else 0.0
-    has_invoice   = 1.0 if any(w in text for w in
-        ["rechnung", "invoice", "fällig", "faktur", "zahlungsziel"]) else 0.0
-    has_dunning   = 1.0 if any(w in text for w in
-        ["mahnung", "dunning", "reminder", "zahlungserinnerung", "fristsetzung"]) else 0.0
-    evidence_count = (has_contract + has_delivery + has_invoice + has_dunning) / 4.0
+    # --- Block A: Claim type & legal basis ---
+    claim_zahlung = 1.0 if any(w in text for w in [
+        "zahlung", "kaufpreis", "rechnung", "unbezahlt", "invoice", "fällig",
+        "faktur", "zahlungsverzug", "zahlungsaufforderung",
+    ]) else 0.0
+    claim_herausgabe = 1.0 if any(w in text for w in [
+        "herausgabe", "rückgabe", "rückübereignung", "return", "surrender",
+    ]) else 0.0
+    claim_schadenersatz = 1.0 if any(w in text for w in [
+        "schadensersatz", "schadenersatz", "damages", "schaden", "ersatz",
+        "entschädigung", "kompensation",
+    ]) else 0.0
+    rg_vertrag = 1.0 if any(w in text for w in [
+        "vertrag", "kaufvertrag", "werkvertrag", "dienstvertrag",
+        "contract", "auftrag", "bestellung", "liefervertrag",
+    ]) else 0.0
+    rg_delikt = 1.0 if any(w in text for w in [
+        "delikt", "unerlaubte handlung", "tort", "negligence",
+        "haftung", "verschulden außervertraglich",
+    ]) else 0.0
 
-    def_country = (case.defendant_domicile_country or case.defendant_country or "").upper().strip()
+    # --- Block B: Parties ---
+    c_legal = 1.0 if case.claimant_is_legal_person else 0.0
+    d_legal = 1.0 if case.defendant_is_legal_person else 0.0
+    is_b2b  = 1.0 if (case.claimant_is_legal_person and case.defendant_is_legal_person) else 0.0
+    is_b2c  = 1.0 if (case.claimant_is_legal_person and not case.defendant_is_legal_person) else 0.0
+    is_xb   = 1.0 if case.is_cross_border else 0.0
 
-    has_quality    = 1.0 if any(w in text for w in
-        ["qualit", "mängel", "defect", "beschwerde", "reklamation"]) else 0.0
-    has_insolvency = 1.0 if any(w in text for w in
-        ["insolv", "bankrupt", "insolvenz", "konkurs", "pleite"]) else 0.0
-    is_services    = 1.0 if any(w in text for w in
-        ["dienstleist", "service", "wartung", "beratung", "support", "reparatur"]) else 0.0
+    # --- Block C: Kläger-Land ---
+    claimant_cc = (
+        getattr(case, "claimant_domicile_country", None)
+        or getattr(case, "claimant_country", None)
+        or getattr(case, "court_country", None)
+        or ""
+    ).upper().strip()
+    c_dach     = 1.0 if claimant_cc in _EU_DACH    else 0.0
+    c_fr_be    = 1.0 if claimant_cc in _EU_FR_BE   else 0.0
+    c_it_es    = 1.0 if claimant_cc in _EU_IT_ES   else 0.0
+    c_eastern  = 1.0 if claimant_cc in _EU_EASTERN else 0.0
 
-    is_other_eu = (
-        1.0 if def_country in _EU_ALL
-        and def_country not in {"DE", "FR", "IT"}
-        and def_country not in _EU_EASTERN
-        else 0.0
-    )
+    # --- Block D: Beklagter-Land ---
+    def_cc = (
+        getattr(case, "defendant_domicile_country", None)
+        or getattr(case, "defendant_country", None)
+        or ""
+    ).upper().strip()
+    d_de_at    = 1.0 if def_cc in _EU_DACH    else 0.0
+    d_fr_be    = 1.0 if def_cc in _EU_FR_BE   else 0.0
+    d_it_es    = 1.0 if def_cc in _EU_IT_ES   else 0.0
+    d_eastern  = 1.0 if def_cc in _EU_EASTERN else 0.0
+    d_other_eu = 1.0 if def_cc in _EU_OTHER   else 0.0
+
+    # --- Block E: Zeit ---
+    try:
+        created = case.created_at
+        if isinstance(created, str):
+            created = datetime.fromisoformat(created)
+        year_norm = float(np.clip((created.year - 2020) / 10.0, 0.0, 1.0))
+        month = created.month
+    except Exception:
+        year_norm = 0.5
+        month = 6
+    quarter_h1 = 1.0 if month <= 6 else 0.0
+    quarter_q4 = 1.0 if month >= 10 else 0.0
+
+    # --- Block F: Beweise ---
+    has_contract = 1.0 if any(w in text for w in [
+        "vertrag", "contract", "auftrag", "kaufvertrag", "werkvertrag",
+        "bestellung", "auftragsbestätigung", "schriftlich vereinbart",
+    ]) else 0.0
+    has_delivery = 1.0 if any(w in text for w in [
+        "lieferschein", "delivery", "liefernachweis", "lieferung",
+        "empfangsbestätigung", "abnahme", "leistungsnachweis",
+    ]) else 0.0
+    has_invoice = 1.0 if any(w in text for w in [
+        "rechnung", "invoice", "fällig", "faktur", "zahlungsziel",
+    ]) else 0.0
+    has_dunning = 1.0 if any(w in text for w in [
+        "mahnung", "dunning", "reminder", "zahlungserinnerung",
+        "fristsetzung", "mahnschreiben",
+    ]) else 0.0
+    has_juris_agr = 1.0 if any(w in text for w in [
+        "gerichtsstandsvereinbarung", "jurisdiction agreement",
+        "gerichtsstand vereinbart", "vereinbarter gerichtsstand",
+    ]) else 0.0
+
+    # --- Block G: Schuldnersituation ---
+    has_insolvency = 1.0 if any(w in text for w in [
+        "insolv", "bankrupt", "insolvenz", "konkurs", "pleite", "überschuldung",
+    ]) else 0.0
+    has_quality = 1.0 if any(w in text for w in [
+        "qualit", "mängel", "mangel", "defect", "beschwerde",
+        "reklamation", "mangelhafte", "mängelhaftung",
+    ]) else 0.0
+
+    # --- Block H: Einwendungen ---
+    def_no_contract = 1.0 if any(w in text for w in [
+        "kein vertrag", "bestreitet vertragsschluss", "no contract",
+        "vertrag nicht geschlossen", "kein vertragsschluss",
+    ]) else 0.0
+    def_not_fulfilled = 1.0 if any(w in text for w in [
+        "nicht erfüllt", "nicht erbracht", "leistung nicht erbracht",
+        "not performed", "non-performance",
+    ]) else 0.0
+    def_defective = 1.0 if any(w in text for w in [
+        "mangelhaft", "mängel", "defective", "qualitätsmangel",
+        "mangelhafte erfüllung", "schlechte leistung",
+    ]) else 0.0
+    def_irrtum = 1.0 if any(w in text for w in [
+        "irrtum", "mistake", "anfechtung wegen irrtum", "willensmangel",
+    ]) else 0.0
+    def_no_damage = 1.0 if any(w in text for w in [
+        "kein schaden", "no damage", "schaden nicht eingetreten",
+        "schaden bestritten",
+    ]) else 0.0
+    def_no_causation = 1.0 if any(w in text for w in [
+        "keine kausalität", "kein kausalzusammenhang", "no causation",
+        "kausalität fehlt",
+    ]) else 0.0
+    def_no_fault = 1.0 if any(w in text for w in [
+        "kein verschulden", "kein vorsatz", "keine fahrlässigkeit",
+        "no fault", "no negligence", "sorgfalt eingehalten",
+    ]) else 0.0
+    def_verjährung = 1.0 if any(w in text for w in [
+        "verjährung", "limitation period", "verjährt", "frist abgelaufen",
+        "prescription",
+    ]) else 0.0
+    def_set_off = 1.0 if any(w in text for w in [
+        "aufrechnung", "set-off", "gegenforderung", "verrechnung",
+        "counterclaim",
+    ]) else 0.0
+
+    # --- Block I: Sonstiges ---
+    is_services = 1.0 if any(w in text for w in [
+        "dienstleist", "service", "wartung", "beratung", "support",
+        "reparatur", "werkvertrag", "consulting",
+    ]) else 0.0
 
     return np.array([
         log_amount,
-        1.0 if case.is_cross_border else 0.0,
-        1.0 if case.claimant_is_legal_person else 0.0,
-        1.0 if case.defendant_is_legal_person else 0.0,
-        has_contract,
-        has_delivery,
-        has_invoice,
-        has_dunning,
-        evidence_count,
-        1.0 if def_country == "DE" else 0.0,
-        1.0 if def_country == "FR" else 0.0,
-        1.0 if def_country == "IT" else 0.0,
-        1.0 if def_country in _EU_EASTERN else 0.0,
-        is_other_eu,
-        1.0 if amount < 2_000 else 0.0,
-        1.0 if 2_000 <= amount < 5_000 else 0.0,
-        1.0 if amount >= 5_000 else 0.0,
-        has_quality,
-        has_insolvency,
+        claim_zahlung, claim_herausgabe, claim_schadenersatz,
+        rg_vertrag, rg_delikt,
+        c_legal, d_legal, is_b2b, is_b2c, is_xb,
+        c_dach, c_fr_be, c_it_es, c_eastern,
+        d_de_at, d_fr_be, d_it_es, d_eastern, d_other_eu,
+        year_norm, quarter_h1, quarter_q4,
+        has_contract, has_delivery, has_invoice, has_dunning, has_juris_agr,
+        has_insolvency, has_quality,
+        def_no_contract, def_not_fulfilled, def_defective, def_irrtum,
+        def_no_damage, def_no_causation, def_no_fault, def_verjährung,
+        def_set_off,
         is_services,
     ], dtype=np.float64)
 
 
-def get_outcome(events: list[CaseEvent]) -> Optional[float]:
-    """Return 1.0 (success) / 0.7 (settled) / 0.0 (failure) / None (unknown)."""
+def get_outcome(events: list[CaseEvent]) -> Optional[int]:
+    """Return outcome class (0/1/2) or None (unknown / insufficient events).
+
+    Class 0 — full_success   : PAYMENT_RECEIVED (after JUDGMENT_WIN or DEFAULT)
+    Class 1 — partial_success: SETTLED (negotiated resolution)
+    Class 2 — failure        : JUDGMENT_LOSS or COLLECTION_FAILED
+    None    — still open / service failed / no terminal event yet
+    """
     types = {e.event_type for e in events}
-    if CaseEventType.PAYMENT_RECEIVED in types:
-        return 1.0
+    if CaseEventType.JUDGMENT_LOSS in types:
+        return OUTCOME_FAILURE
+    if CaseEventType.COLLECTION_FAILED in types:
+        return OUTCOME_FAILURE
     if CaseEventType.SETTLED in types:
-        return 0.7  # partial success
-    if CaseEventType.JUDGMENT_LOSS in types or CaseEventType.COLLECTION_FAILED in types:
-        return 0.0
+        return OUTCOME_PARTIAL   # settled = partial (may include payment)
+    if CaseEventType.PAYMENT_RECEIVED in types:
+        return OUTCOME_FULL      # full payment received after judgment
     return None
 
 
+def _to_one_hot(labels: np.ndarray, n_classes: int = OUTPUT_DIM) -> np.ndarray:
+    """Convert integer class labels (n,) to one-hot matrix (n, n_classes)."""
+    n = len(labels)
+    oh = np.zeros((n, n_classes), dtype=np.float64)
+    oh[np.arange(n), labels.astype(int)] = 1.0
+    return oh
+
+
 # ---------------------------------------------------------------------------
-# Neural network
+# Neural network (3-class softmax + categorical cross-entropy)
 # ---------------------------------------------------------------------------
 
 class NeuralNet:
     """2-hidden-layer MLP with Adam optimizer.
 
-    Architecture: Input(20) → Dense(16,ReLU) → Dense(8,ReLU) → Dense(1,Sigmoid)
+    Architecture: Input(40) → Dense(32, ReLU) → Dense(16, ReLU) → Dense(3, Softmax)
+    Loss        : Categorical cross-entropy
+    Backprop    : dZ_output = y_hat - y_true  (same elegant form as BCE+sigmoid)
     """
 
     def __init__(self, hidden_dims: list[int] = HIDDEN_DIMS, seed: int = 42):
         rng = np.random.RandomState(seed)
-        dims = [INPUT_DIM] + hidden_dims + [1]
+        dims = [INPUT_DIM] + hidden_dims + [OUTPUT_DIM]
         self.W: list[np.ndarray] = []
         self.b: list[np.ndarray] = []
         for i in range(len(dims) - 1):
-            # Xavier / Glorot uniform initialisation
             limit = math.sqrt(6.0 / (dims[i] + dims[i + 1]))
             self.W.append(rng.uniform(-limit, limit, (dims[i], dims[i + 1])))
             self.b.append(np.zeros((1, dims[i + 1])))
         self._reset_adam()
-
-    # --- Adam state ---
 
     def _reset_adam(self) -> None:
         self.mW = [np.zeros_like(w) for w in self.W]
@@ -158,8 +323,6 @@ class NeuralNet:
         self.mb = [np.zeros_like(b) for b in self.b]
         self.vb = [np.zeros_like(b) for b in self.b]
         self.t: int = 0
-
-    # --- Activations ---
 
     @staticmethod
     def _relu(x: np.ndarray) -> np.ndarray:
@@ -170,10 +333,11 @@ class NeuralNet:
         return (x > 0.0).astype(np.float64)
 
     @staticmethod
-    def _sigmoid(x: np.ndarray) -> np.ndarray:
-        return 1.0 / (1.0 + np.exp(-np.clip(x, -500.0, 500.0)))
-
-    # --- Forward ---
+    def _softmax(x: np.ndarray) -> np.ndarray:
+        """Numerically stable softmax."""
+        x_shift = x - np.max(x, axis=1, keepdims=True)
+        ex = np.exp(x_shift)
+        return ex / (np.sum(ex, axis=1, keepdims=True) + 1e-12)
 
     def forward(self, X: np.ndarray) -> tuple[np.ndarray, list, list]:
         """Return (y_hat, Z_list, A_list) for backprop."""
@@ -185,18 +349,16 @@ class NeuralNet:
             A = self._relu(Z)
             Z_list.append(Z)
             A_list.append(A)
-        # output layer
         Z_out = A @ self.W[-1] + self.b[-1]
-        y_hat = self._sigmoid(Z_out)
+        y_hat = self._softmax(Z_out)
         Z_list.append(Z_out)
         A_list.append(y_hat)
         return y_hat, Z_list, A_list
 
     def predict(self, X: np.ndarray) -> np.ndarray:
+        """Returns class probabilities (n, 3)."""
         y_hat, _, _ = self.forward(X)
         return y_hat
-
-    # --- Training ---
 
     def train_epoch(
         self,
@@ -210,7 +372,7 @@ class NeuralNet:
         beta2: float = 0.999,
         eps: float = 1e-8,
     ) -> float:
-        """One full pass over the data using mini-batch Adam. Returns mean BCE loss."""
+        """One full pass. y is one-hot (n, 3). Returns mean CCE loss."""
         n = X.shape[0]
         idx = np.random.permutation(n)
         X_s, y_s = X[idx], y[idx]
@@ -220,31 +382,25 @@ class NeuralNet:
         for start in range(0, n, batch_size):
             Xb = X_s[start:start + batch_size]
             yb = y_s[start:start + batch_size]
-            m = Xb.shape[0]
+            m  = Xb.shape[0]
 
-            # Forward
             y_hat, Z_list, A_list = self.forward(Xb)
 
-            # BCE loss (for monitoring)
-            loss = -np.mean(
-                yb * np.log(y_hat + 1e-12) + (1 - yb) * np.log(1 - y_hat + 1e-12)
-            )
+            # CCE loss (for monitoring)
+            loss = -np.mean(np.sum(yb * np.log(y_hat + 1e-12), axis=1))
             total_loss += loss
-            n_batches += 1
+            n_batches  += 1
 
-            # Backward
-            # Output-layer gradient: d(BCE)/d(Z_out) = (y_hat - y)/m
-            # (combined gradient through sigmoid + BCE loss)
-            dZ = (y_hat - yb) / m   # shape (m, 1)
+            # Combined gradient: dCCE/dZ_softmax = (y_hat - y_true) / m
+            dZ = (y_hat - yb) / m
 
             self.t += 1
 
             for i in reversed(range(len(self.W))):
-                A_prev = A_list[i]             # (m, d_in)
+                A_prev = A_list[i]
                 dW = A_prev.T @ dZ + l2 * self.W[i]
                 db = np.sum(dZ, axis=0, keepdims=True)
 
-                # Adam update
                 self.mW[i] = beta1 * self.mW[i] + (1 - beta1) * dW
                 self.vW[i] = beta2 * self.vW[i] + (1 - beta2) * dW ** 2
                 self.mb[i] = beta1 * self.mb[i] + (1 - beta1) * db
@@ -258,18 +414,16 @@ class NeuralNet:
                 self.W[i] -= lr * mW_hat / (np.sqrt(vW_hat) + eps)
                 self.b[i] -= lr * mb_hat / (np.sqrt(vb_hat) + eps)
 
-                # Propagate gradient to previous layer (skip at input layer)
                 if i > 0:
-                    dA_prev = dZ @ self.W[i].T           # (m, d_in)
-                    dZ = dA_prev * self._relu_d(Z_list[i - 1])  # (m, d_in)
+                    dA_prev = dZ @ self.W[i].T
+                    dZ = dA_prev * self._relu_d(Z_list[i - 1])
 
         return total_loss / max(n_batches, 1)
-
-    # --- Serialise / deserialise ---
 
     def to_dict(self) -> dict:
         return {
             "hidden_dims": HIDDEN_DIMS,
+            "output_dim":  OUTPUT_DIM,
             "W": [w.tolist() for w in self.W],
             "b": [b.tolist() for b in self.b],
         }
@@ -292,40 +446,43 @@ async def collect_training_data(
 ) -> tuple[np.ndarray, np.ndarray, list[str], list[str]]:
     """Load all completed cases with known outcomes.
 
-    Returns (X, y, case_ids, case_titles).
-    X: (n, INPUT_DIM), y: (n, 1).
+    Returns (X, y_onehot, case_ids, case_titles).
+    X: (n, 40),  y_onehot: (n, 3) one-hot encoded class labels.
     """
     cases_result = await db.execute(
         select(Case).where(Case.status == CaseStatus.COMPLETED)
     )
     cases = cases_result.scalars().all()
 
-    X_list: list[np.ndarray] = []
-    y_list: list[list[float]] = []
-    ids: list[str] = []
-    titles: list[str] = []
+    X_list:     list[np.ndarray] = []
+    label_list: list[int]        = []
+    ids:        list[str]        = []
+    titles:     list[str]        = []
 
     for case in cases:
         ev_result = await db.execute(
             select(CaseEvent).where(CaseEvent.case_id == case.id)
         )
-        events = ev_result.scalars().all()
+        events  = ev_result.scalars().all()
         outcome = get_outcome(events)
         if outcome is None:
             continue
         X_list.append(extract_features(case))
-        y_list.append([outcome])
+        label_list.append(outcome)
         ids.append(str(case.id))
         titles.append(case.title)
 
     if not X_list:
         return (
             np.zeros((0, INPUT_DIM)),
-            np.zeros((0, 1)),
+            np.zeros((0, OUTPUT_DIM)),
             [],
             [],
         )
-    return np.array(X_list), np.array(y_list), ids, titles
+    X      = np.array(X_list)
+    labels = np.array(label_list, dtype=int)
+    y_oh   = _to_one_hot(labels)
+    return X, y_oh, ids, titles
 
 
 # ---------------------------------------------------------------------------
@@ -353,10 +510,9 @@ async def train_model(
             "n_train_cases": n,
         }
 
-    # Train / validation split
     rng = np.random.RandomState(seed)
     idx = rng.permutation(n)
-    val_size = max(1, int(n * val_split))
+    val_size  = max(1, int(n * val_split))
     val_idx   = idx[:val_size]
     train_idx = idx[val_size:]
 
@@ -372,14 +528,13 @@ async def train_model(
             lr=lr, l2=l2, batch_size=batch_size,
         )
         if epoch % 20 == 0 or epoch == epochs - 1:
-            val_pred = net.predict(X_val)
-            val_loss = float(-np.mean(
-                y_val * np.log(val_pred + 1e-12)
-                + (1 - y_val) * np.log(1 - val_pred + 1e-12)
-            ))
-            val_acc = float(np.mean((val_pred >= 0.5) == y_val))
-            tr_pred  = net.predict(X_train)
-            tr_acc   = float(np.mean((tr_pred >= 0.5) == y_train))
+            val_pred   = net.predict(X_val)
+            val_loss   = float(-np.mean(np.sum(y_val  * np.log(val_pred  + 1e-12), axis=1)))
+            tr_pred    = net.predict(X_train)
+            tr_loss_m  = float(-np.mean(np.sum(y_train * np.log(tr_pred  + 1e-12), axis=1)))
+            # Accuracy: argmax match
+            val_acc    = float(np.mean(np.argmax(val_pred, axis=1) == np.argmax(y_val,   axis=1)))
+            tr_acc     = float(np.mean(np.argmax(tr_pred,  axis=1) == np.argmax(y_train, axis=1)))
             history.append({
                 "epoch":      epoch + 1,
                 "train_loss": round(float(train_loss), 4),
@@ -391,12 +546,11 @@ async def train_model(
     # Final metrics
     train_pred = net.predict(X_train)
     val_pred   = net.predict(X_val)
-    train_acc  = float(np.mean((train_pred >= 0.5) == y_train))
-    val_acc    = float(np.mean((val_pred   >= 0.5) == y_val))
+    train_acc  = float(np.mean(np.argmax(train_pred, axis=1) == np.argmax(y_train, axis=1)))
+    val_acc    = float(np.mean(np.argmax(val_pred,   axis=1) == np.argmax(y_val,   axis=1)))
 
     # Feature importance: mean |first-layer weight| per input feature
     importance_raw = np.mean(np.abs(net.W[0]), axis=1).tolist()
-    # Sort descending
     imp_ranked = sorted(
         [{"name": FEATURE_NAMES[i], "importance": round(importance_raw[i], 5)}
          for i in range(INPUT_DIM)],
@@ -411,9 +565,8 @@ async def train_model(
     for m in old_models:
         m.is_active = False
 
-    # Version counter
     all_models = (await db.execute(select(NNModel))).scalars().all()
-    version = max((m.version for m in all_models), default=0) + 1
+    version    = max((m.version for m in all_models), default=0) + 1
 
     nn_row = NNModel(
         version=version,
@@ -435,7 +588,7 @@ async def train_model(
 
     return {
         "success":        True,
-        "message":        f"Modell v{version} auf {len(train_idx)} Fällen trainiert.",
+        "message":        f"Modell v{version} auf {len(train_idx)} Fällen trainiert (3-Klassen CCE).",
         "version":        version,
         "n_train_cases":  int(len(train_idx)),
         "n_val_cases":    int(len(val_idx)),
@@ -455,7 +608,10 @@ async def predict_for_case(
 ) -> tuple[Optional[float], Optional[dict]]:
     """Run NN forward pass for a case.
 
-    Returns (p_nn_raw, meta_dict) or (None, None) if no active model.
+    Returns (p_cash_nn, meta_dict) or (None, None) if no active model.
+
+    p_cash_nn = P[full_success] + 0.5 × P[partial_success]
+    This is a weighted expected-recovery probability used for blending.
     """
     result = await db.execute(
         select(NNModel)
@@ -467,23 +623,31 @@ async def predict_for_case(
     if nn_row is None:
         return None, None
 
-    net = NeuralNet.from_dict(nn_row.weights)
-    X = extract_features(case).reshape(1, -1)
-    p_raw = float(net.predict(X)[0, 0])
+    net  = NeuralNet.from_dict(nn_row.weights)
+    X    = extract_features(case).reshape(1, -1)
+    probs = net.predict(X)[0]          # shape (3,)
+
+    p_full    = float(probs[OUTCOME_FULL])
+    p_partial = float(probs[OUTCOME_PARTIAL])
+    p_failure = float(probs[OUTCOME_FAILURE])
+    p_cash_nn = float(np.clip(p_full + 0.5 * p_partial, 0.0, 1.0))
 
     w = nn_blend_weight(nn_row.n_train_cases)
     meta = {
-        "p_nn_raw":       round(p_raw, 4),
-        "nn_weight":      round(w, 4),
-        "n_train_cases":  nn_row.n_train_cases,
-        "model_version":  nn_row.version,
-        "val_accuracy":   nn_row.val_accuracy,
+        "p_nn_raw":         round(p_cash_nn, 4),
+        "p_full_success":   round(p_full,    4),
+        "p_partial_success":round(p_partial, 4),
+        "p_failure":        round(p_failure, 4),
+        "nn_weight":        round(w, 4),
+        "n_train_cases":    nn_row.n_train_cases,
+        "model_version":    nn_row.version,
+        "val_accuracy":     nn_row.val_accuracy,
     }
-    return p_raw, meta
+    return p_cash_nn, meta
 
 
 async def get_all_predictions(db: AsyncSession) -> list[dict]:
-    """Return NN predictions for all completed cases (for dashboard display)."""
+    """Return NN predictions for all completed cases (dashboard display)."""
     result = await db.execute(
         select(NNModel)
         .where(NNModel.is_active == True)
@@ -495,21 +659,32 @@ async def get_all_predictions(db: AsyncSession) -> list[dict]:
         return []
 
     net = NeuralNet.from_dict(nn_row.weights)
-    X, y, ids, titles = await collect_training_data(db)
+    X, y_oh, ids, titles = await collect_training_data(db)
     if len(ids) == 0:
         return []
 
-    preds = net.predict(X)
+    probs  = net.predict(X)           # (n, 3)
+    labels = np.argmax(y_oh, axis=1)  # true class indices
+    preds  = np.argmax(probs, axis=1) # predicted class indices
+
+    class_labels = ["Vollerfolg", "Teilerfolg", "Misserfolg"]
     out = []
     for i, (case_id, title) in enumerate(zip(ids, titles)):
-        p_nn = float(preds[i, 0])
-        actual = float(y[i, 0])
+        p_full    = float(probs[i, OUTCOME_FULL])
+        p_partial = float(probs[i, OUTCOME_PARTIAL])
+        p_cash_nn = float(np.clip(p_full + 0.5 * p_partial, 0.0, 1.0))
         out.append({
-            "case_id":       case_id,
-            "case_title":    title,
-            "p_nn":          round(p_nn, 4),
-            "actual_outcome": actual,
-            "correct":       (p_nn >= 0.5) == (actual >= 0.5),
+            "case_id":          case_id,
+            "case_title":       title,
+            "p_nn":             round(p_cash_nn, 4),
+            "p_full":           round(p_full, 4),
+            "p_partial":        round(float(probs[i, OUTCOME_PARTIAL]), 4),
+            "p_failure":        round(float(probs[i, OUTCOME_FAILURE]), 4),
+            "actual_class":     int(labels[i]),
+            "actual_label":     class_labels[int(labels[i])],
+            "predicted_class":  int(preds[i]),
+            "predicted_label":  class_labels[int(preds[i])],
+            "correct":          bool(preds[i] == labels[i]),
         })
     return out
 
@@ -521,11 +696,13 @@ async def get_all_predictions(db: AsyncSession) -> list[dict]:
 def nn_blend_weight(n_train_cases: int) -> float:
     """Weight of NN component in final p_cash blend.
 
-    0 training cases → 0.0
-    5  cases         → ~0.06
-    25 cases         → ~0.19
-    100 cases        → ~0.29
-    Asymptotes to 0.30 with many cases.
+    < 3 cases → 0.0   (NN inactive)
+    25  cases → ~0.19  (growing)
+    75  cases → ~0.28  (substantial)
+    ∞   cases → 0.30   (asymptote)
+
+    The NN learns systematic LLM calibration errors across jurisdictions,
+    claim types, and defendant profiles from historical outcomes.
     """
     if n_train_cases < 3:
         return 0.0

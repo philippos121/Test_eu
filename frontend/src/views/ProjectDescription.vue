@@ -62,14 +62,14 @@
               <div class="tree-branch">
                 <div class="tree-node">
                   <div class="node-label">p<sub>valid</sub></div>
-                  <div class="node-desc">Anspruch rechtlich gültig<br/><small>LLM-Rechtsanalyse + Statistik</small></div>
+                  <div class="node-desc">Anspruch rechtlich gültig<br/><small>LLM-Rechtsanalyse (3 Teilfragen)</small></div>
                 </div>
               </div>
               <span class="tree-op">&times;</span>
               <div class="tree-branch">
                 <div class="tree-node">
                   <div class="node-label">p<sub>provable</sub></div>
-                  <div class="node-desc">Anspruch beweisbar<br/><small>Beweisscore + Statistik</small></div>
+                  <div class="node-desc">Anspruch beweisbar<br/><small>Regelbasierter Beweisscore</small></div>
                 </div>
               </div>
               <span class="tree-op">&times;</span>
@@ -84,42 +84,46 @@
           <div class="pillar-details mt-2">
             <div class="pillar-item">
               <strong>p<sub>valid</sub></strong> = P(entstanden) × P(nicht erloschen) × P(durchsetzbar)<br/>
-              <small>70% LLM-Rechtsanalyse (GPT-5.2 + optionale Web-Suche nach Rechtsordnung) + 30% Statistik vergleichbarer Fälle</small>
+              <small>100% LLM-Rechtsanalyse: GPT-5.2 bewertet Anspruchsentstehung, Erlöschensgrund und Durchsetzbarkeit (Verjährung/lis pendens). Beweislücken senken diesen Wert nicht — nur Rechtslage zählt.</small>
             </div>
             <div class="pillar-item">
               <strong>p<sub>provable</sub></strong> = Beweisbarkeit der Anspruchsvoraussetzungen<br/>
-              <small>40% regelbasierter Beweisscore (Vertrag, Liefernachweis, Rechnung, Mahnung) + 60% Statistik vergleichbarer Fälle</small>
+              <small>100% regelbasierter Beweisscore: Punkte für Vertrag, Liefernachweis, Rechnung, Mahnung, Gerichtsstandsvereinbarung. Sigmoid-Transformation auf [0,1].</small>
             </div>
             <div class="pillar-item">
               <strong>p<sub>payment</sub></strong> = Tatsächliche Zahlung nach Urteil<br/>
-              <small>65% Einzelfall (50% Zahlungsfähigkeit via LLM/Insolvenzregister + 50% Zahlungswilligkeit aus Schuldnerhistorie) + 35% Statistik</small>
+              <small>50% Zahlungsfähigkeit (LLM/Insolvenzregister) + 50% Zahlungswilligkeit (Schuldnerhistorie aus Fallakten).</small>
+            </div>
+            <div class="pillar-item" style="border-left-color: var(--primary-light)">
+              <strong>p<sub>cash,final</sub></strong> = (1 − w<sub>NN</sub>) × p<sub>cash</sub> + w<sub>NN</sub> × p<sub>NN</sub><br/>
+              <small>NN-Blend: Das neuronale Netz (40 Features → 32 → 16 → 3 Klassen, Softmax + CCE) korrigiert p<sub>cash</sub> asymptotisch mit bis zu 30% Gewicht, sobald genug Trainingsdaten vorliegen.</small>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- Bayesian Learning -->
+      <!-- Neural Network Learning -->
       <section class="card fade-in mt-2">
-        <h2>{{ t('project.bayesian') }}</h2>
-        <p>{{ t('project.bayesianText') }}</p>
+        <h2>{{ t('project.nnLearning') }}</h2>
+        <p>{{ t('project.nnLearningText') }}</p>
 
-        <div class="bayes-visual mt-2">
-          <div class="bayes-step">
-            <div class="bayes-icon">&#945;, &#946;</div>
-            <h4>Prior</h4>
-            <p>Ausgangswissen als Beta-Verteilung Beta(&alpha;, &beta;)</p>
+        <div class="nn-visual mt-2">
+          <div class="nn-step">
+            <div class="nn-icon">&#x1F4CB;</div>
+            <h4>Falldaten</h4>
+            <p>Jeder Fall wird mit 40 Features kodiert: MS-Kläger/Beklagter, Anspruchsart, Rechtsgrund, B2B/B2C, Beweise, Einwendungen, Jahr/Quartal</p>
           </div>
-          <div class="bayes-arrow">&rarr;</div>
-          <div class="bayes-step">
-            <div class="bayes-icon">+n</div>
-            <h4>Beobachtung</h4>
-            <p>Abgeschlossene Fälle liefern Erfolge / Misserfolge</p>
+          <div class="nn-arrow">&rarr;</div>
+          <div class="nn-step">
+            <div class="nn-icon">&#x1F9E0;</div>
+            <h4>NN (40→32→16→3)</h4>
+            <p>Feedforward-Netz mit ReLU-Schichten + Softmax-Ausgabe. Training mit kategorischer Kreuzentropie (CCE) via Adam</p>
           </div>
-          <div class="bayes-arrow">&rarr;</div>
-          <div class="bayes-step">
-            <div class="bayes-icon">&#945;', &#946;'</div>
-            <h4>Posterior</h4>
-            <p>Aktualisierte Schätzung Beta(&alpha;+s, &beta;+f)</p>
+          <div class="nn-arrow">&rarr;</div>
+          <div class="nn-step">
+            <div class="nn-icon">&#x2696;&#xFE0F;</div>
+            <h4>Blend ≤ 30%</h4>
+            <p>p<sub>cash,final</sub> = (1−w) × p<sub>LLM</sub> + w × p<sub>NN</sub>. Gewicht w wächst asymptotisch auf max. 30% mit Trainingsdaten</p>
           </div>
         </div>
       </section>
@@ -304,35 +308,34 @@ const { t } = useI18nStore()
 .node-desc { font-size: 0.78rem; color: var(--text-secondary); margin-top: 4px; }
 .tree-op { font-size: 1.4rem; font-weight: 700; color: var(--primary); }
 
-/* Bayes visual */
-.bayes-visual {
+/* NN visual */
+.nn-visual {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   flex-wrap: wrap;
   justify-content: center;
 }
 
-.bayes-step {
+.nn-step {
   text-align: center;
   flex: 1;
-  min-width: 140px;
-  max-width: 200px;
+  min-width: 160px;
+  max-width: 220px;
   padding: 16px;
   background: var(--bg);
   border-radius: var(--radius);
+  border: 1px solid var(--border);
 }
 
-.bayes-icon {
-  font-size: 1.5rem;
-  font-weight: 700;
-  color: var(--primary);
+.nn-icon {
+  font-size: 1.8rem;
   margin-bottom: 8px;
 }
 
-.bayes-step h4 { font-size: 0.95rem; margin-bottom: 4px; }
-.bayes-step p { font-size: 0.8rem; color: var(--text-secondary); }
-.bayes-arrow { font-size: 1.5rem; color: var(--text-light); }
+.nn-step h4 { font-size: 0.95rem; margin-bottom: 4px; }
+.nn-step p { font-size: 0.78rem; color: var(--text-secondary); line-height: 1.5; }
+.nn-arrow { font-size: 1.5rem; color: var(--text-light); align-self: center; padding-top: 8px; }
 
 /* EV table */
 .ev-example {
