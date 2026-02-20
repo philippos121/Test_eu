@@ -435,10 +435,15 @@ class NNTrainResponse(BaseModel):
 class NNCasePrediction(BaseModel):
     case_id: str
     case_title: str
-    features: Optional[dict] = None
     p_nn: float
-    actual_outcome: Optional[float] = None
-    correct: Optional[bool] = None
+    p_full: float
+    p_partial: float
+    p_failure: float
+    actual_class: int
+    actual_label: str
+    predicted_class: int
+    predicted_label: str
+    correct: bool
 
 
 class PriorUpdateResult(BaseModel):

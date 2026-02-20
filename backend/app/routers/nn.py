@@ -9,6 +9,8 @@ from ..auth import get_current_user
 from ..database import get_db
 from ..models import NNModel, User
 from ..schemas import NNCasePrediction, NNModelRead, NNTrainRequest, NNTrainResponse
+import numpy as np
+
 from ..services.nn_service import (
     FEATURE_NAMES,
     collect_training_data,
@@ -106,13 +108,21 @@ async def nn_data_summary(
     """Return summary of available training data."""
     _, y, ids, titles = await collect_training_data(db)
     n = len(ids)
-    n_success = int(sum(1 for yi in y if yi[0] >= 0.5)) if n else 0
     blend_weight = nn_blend_weight(n)
+
+    if n > 0:
+        labels = np.argmax(y, axis=1)
+        n_class0 = int(np.sum(labels == 0))
+        n_class1 = int(np.sum(labels == 1))
+        n_class2 = int(np.sum(labels == 2))
+    else:
+        n_class0 = n_class1 = n_class2 = 0
 
     return {
         "n_labeled_cases":  n,
-        "n_success":        n_success,
-        "n_failure":        n - n_success,
+        "n_class0":         n_class0,
+        "n_class1":         n_class1,
+        "n_class2":         n_class2,
         "blend_weight":     round(blend_weight, 4),
         "features":         FEATURE_NAMES,
         "n_features":       len(FEATURE_NAMES),
