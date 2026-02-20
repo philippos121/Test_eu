@@ -1,0 +1,69 @@
+name: eu_claims_portal
+description: EU Small Claims Procedure Assistant — Mobile App
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # State management
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+
+  # Navigation
+  go_router: ^13.2.0
+
+  # HTTP / API
+  dio: ^5.4.3+1
+  pretty_dio_logger: ^1.3.1
+
+  # Secure storage (JWT)
+  flutter_secure_storage: ^9.0.0
+
+  # Charts (loss curve, probability bars)
+  fl_chart: ^0.68.0
+
+  # UI extras
+  shimmer: ^3.0.0
+  cached_network_image: ^3.3.1
+  intl: ^0.19.0
+  timeago: ^3.6.1
+  url_launcher: ^6.2.6
+  share_plus: ^9.0.0
+  file_picker: ^8.0.0+1
+  open_filex: ^4.3.4
+  path_provider: ^2.1.4
+  flutter_animate: ^4.5.0
+  google_fonts: ^6.2.1
+  percent_indicator: ^4.2.3
+  badges: ^3.1.2
+  pinput: ^5.0.0
+  toastification: ^2.1.0
+
+  # Forms
+  reactive_forms: ^17.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  build_runner: ^2.4.9
+  riverpod_generator: ^2.3.11
+
+flutter:
+  uses-material-design: true
+  generate: true
+
+  assets:
+    - assets/icons/
+
+  fonts:
+    - family: Roboto
+      fonts:
+        - asset: packages/google_fonts/fonts/Roboto-Regular.ttf
