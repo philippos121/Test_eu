@@ -1,0 +1,141 @@
+# ============================================================
+# Codemagic CI/CD — EU-Bagatellverfahren Flutter App
+# ============================================================
+# Sign up free at https://codemagic.io/
+# Connect this GitHub repo → Codemagic auto-detects this file.
+#
+# Required environment variables (set in Codemagic UI):
+#   APP_STORE_CONNECT_ISSUER_ID       App Store Connect API key issuer
+#   APP_STORE_CONNECT_KEY_IDENTIFIER  Key ID (starts with A...)
+#   APP_STORE_CONNECT_PRIVATE_KEY     .p8 private key content
+#   CERTIFICATE_PRIVATE_KEY           RSA private key for signing cert
+#   API_BASE_URL                      https://yourserver.com
+#
+# Optional:
+#   MATCH_PROVISIONING (if using Fastlane Match)
+# ============================================================
+
+workflows:
+
+  # ── iOS App (TestFlight) ───────────────────────────────────────────────────
+  ios-testflight:
+    name: iOS — TestFlight Distribution
+    max_build_duration: 60
+    instance_type: mac_mini_m2   # Apple Silicon, fastest free tier
+    integrations:
+      app_store_connect: EU_Portal_ASC  # configure in Codemagic → Integrations
+
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: eu.portal.claims
+      flutter: 3.22.0
+      xcode: latest
+      cocoapods: default
+      vars:
+        BUNDLE_ID: eu.portal.claims
+        XCODE_SCHEME: Runner
+        XCODE_WORKSPACE: ios/Runner.xcworkspace
+
+    scripts:
+      # 1. Generate missing Xcode project (safe to run on existing project)
+      - name: Generate Xcode project scaffold
+        script: |
+          cd mobile
+          flutter create . \
+            --project-name eu_claims_portal \
+            --org eu.portal \
+            --platforms=ios \
+            --no-overwrite 2>/dev/null || true
+
+      # 2. Install Flutter dependencies
+      - name: Flutter pub get
+        script: |
+          cd mobile
+          flutter pub get
+
+      # 3. CocoaPods
+      - name: Pod install
+        script: |
+          cd mobile/ios
+          pod install --repo-update
+
+      # 4. Set build number from CI run number
+      - name: Set build number
+        script: |
+          BUILD_NUMBER=$(($(app-store-connect get-latest-testflight-build-number "$BUNDLE_ID") + 1)) || BUILD_NUMBER=$BUILD_NUMBER
+          cd mobile/ios
+          agvtool new-version -all $BUILD_NUMBER
+
+      # 5. Build IPA
+      - name: Build iOS (release)
+        script: |
+          cd mobile
+          flutter build ipa \
+            --release \
+            --export-options-plist=/Users/builder/export_options.plist \
+            --dart-define=API_BASE_URL=$API_BASE_URL
+
+    artifacts:
+      - mobile/build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - mobile/flutter_drive.log
+
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        beta_groups:
+          - EU Portal Testers
+      email:
+        recipients:
+          - $CM_SUBMITTER_EMAIL
+        notify:
+          success: true
+          failure: true
+
+  # ── Flutter Web (PWA) ──────────────────────────────────────────────────────
+  web-deploy:
+    name: Flutter Web — Build & Artifact
+    max_build_duration: 30
+    instance_type: linux_x2
+
+    environment:
+      flutter: 3.22.0
+      vars:
+        API_BASE_URL: ""   # empty = same-origin when served from FastAPI
+
+    scripts:
+      - name: Scaffold web platform
+        script: |
+          cd mobile
+          flutter create . \
+            --project-name eu_claims_portal \
+            --org eu.portal \
+            --platforms=web \
+            --no-overwrite 2>/dev/null || true
+
+      - name: Flutter pub get
+        script: |
+          cd mobile
+          flutter pub get
+
+      - name: Build Flutter Web
+        script: |
+          cd mobile
+          flutter build web \
+            --release \
+            --web-renderer canvaskit \
+            --base-href / \
+            --dart-define=API_BASE_URL=
+
+    artifacts:
+      - mobile/build/web.zip
+
+    publishing:
+      email:
+        recipients:
+          - $CM_SUBMITTER_EMAIL
+        notify:
+          success: true
+          failure: false

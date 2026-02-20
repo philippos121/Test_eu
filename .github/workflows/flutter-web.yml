@@ -1,0 +1,101 @@
+name: Flutter Web — Build & Deploy
+
+on:
+  push:
+    branches: [main, master, "claude/**"]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/flutter-web.yml"
+  workflow_dispatch:    # run manually from GitHub Actions tab
+
+jobs:
+  build-and-deploy:
+    name: Build Flutter Web + Deploy to Server
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ───────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Flutter setup ──────────────────────────────────────────────────
+      - name: Install Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.22.x"
+          channel: "stable"
+          cache: true
+
+      # ── 3. Generate missing iOS/Android scaffolding (needed for pub get) ──
+      - name: Generate platform files (flutter create scaffold)
+        working-directory: mobile
+        run: |
+          flutter create . \
+            --project-name eu_claims_portal \
+            --org eu.portal \
+            --platforms=web \
+            --no-overwrite 2>/dev/null || true
+
+      # ── 4. Install dependencies ───────────────────────────────────────────
+      - name: Install Dart dependencies
+        working-directory: mobile
+        run: flutter pub get
+
+      # ── 5. Build Flutter Web ──────────────────────────────────────────────
+      - name: Build Flutter Web (release, canvaskit renderer)
+        working-directory: mobile
+        run: |
+          flutter build web \
+            --release \
+            --web-renderer canvaskit \
+            --base-href / \
+            --dart-define=API_BASE_URL=
+
+      # ── 6. Show build size ────────────────────────────────────────────────
+      - name: Report build size
+        run: du -sh mobile/build/web
+
+      # ── 7a. Upload artifact (always, even if deploy is skipped) ──────────
+      - name: Upload web build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-web-build
+          path: mobile/build/web/
+          retention-days: 14
+
+      # ── 7b. Deploy to server via SSH (optional — needs secrets) ──────────
+      #  Add these secrets in GitHub → Settings → Secrets & Variables → Actions:
+      #    SERVER_HOST      = your server IP or domain
+      #    SERVER_USER      = ssh username (e.g. ubuntu, root)
+      #    SSH_PRIVATE_KEY  = private key that matches authorized_keys on server
+      #    DEPLOY_PATH      = /path/to/Test_eu/mobile_dist  (absolute path on server)
+      - name: Deploy to server via rsync
+        if: >
+          github.ref == 'refs/heads/main' &&
+          secrets.SERVER_HOST != '' &&
+          secrets.SSH_PRIVATE_KEY != ''
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '/opt/eu_portal/mobile_dist' }}
+        run: |
+          # Write SSH key
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+
+          # Sync Flutter web build to server
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            mobile/build/web/ \
+            "$SERVER_USER@$SERVER_HOST:$DEPLOY_PATH/"
+
+          # Restart FastAPI to pick up new files
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=no \
+            "$SERVER_USER@$SERVER_HOST" \
+            "sudo systemctl restart eu-portal 2>/dev/null || pkill -HUP uvicorn 2>/dev/null || true"
+
+          echo "✅ Deployed to $SERVER_HOST:$DEPLOY_PATH"

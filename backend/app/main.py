@@ -1,9 +1,12 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 
 from .auth import hash_password, verify_password
@@ -167,3 +170,30 @@ app.include_router(nn_router_mod.router)
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+# ── Flutter Web PWA (served at /) ─────────────────────────────────────────────
+# The Flutter web build is placed in  mobile_dist/  (produced by GitHub Actions
+# or by running: cd mobile && flutter build web --release --base-href /
+# then: cp -r build/web ../mobile_dist)
+#
+# All /api/* routes are already registered above, so they take priority.
+# Everything else falls through to the Flutter SPA (index.html for deep links).
+
+_WEB_DIST = Path(__file__).parent.parent.parent / "mobile_dist"
+
+if _WEB_DIST.exists():
+    # Serve Flutter static assets (JS, canvaskit, icons, fonts…)
+    app.mount("/flutter_assets", StaticFiles(directory=str(_WEB_DIST / "flutter_assets")), name="flutter_assets")
+    app.mount("/icons", StaticFiles(directory=str(_WEB_DIST / "icons")), name="icons")
+    app.mount("/canvaskit", StaticFiles(directory=str(_WEB_DIST / "canvaskit")), name="canvaskit")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_flutter(full_path: str):
+        """Serve the Flutter Web SPA — all non-API paths return index.html."""
+        # Try exact file first (JS, CSS, assets…)
+        candidate = _WEB_DIST / full_path
+        if candidate.exists() and candidate.is_file():
+            return FileResponse(str(candidate))
+        # Fallback: return index.html for SPA routing (deep links work on iPhone)
+        return FileResponse(str(_WEB_DIST / "index.html"))

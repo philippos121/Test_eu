@@ -1,10 +1,18 @@
-// Configuration: change BASE_URL to point to the backend server.
-// In production, use your deployed server URL.
-// In development: iOS simulator → http://localhost:8000,
-//                 Android emulator → http://10.0.2.2:8000
+import 'package:flutter/foundation.dart' show kIsWeb;
+
+/// Base URL strategy:
+///  - Web (PWA):        '' (empty) → same-origin, Flutter Web served from backend
+///  - Android emulator: 10.0.2.2:8000 → host machine localhost
+///  - Physical device:  --dart-define=API_BASE_URL=http://192.168.x.x:8000
+///  - Production:       --dart-define=API_BASE_URL=https://yourserver.com
 class ApiConfig {
-  static const String baseUrl =
-      String.fromEnvironment('API_BASE_URL', defaultValue: 'http://10.0.2.2:8000');
+  static String get baseUrl {
+    if (kIsWeb) return ''; // same-origin when served from FastAPI
+    return const String.fromEnvironment(
+      'API_BASE_URL',
+      defaultValue: 'http://10.0.2.2:8000',
+    );
+  }
 
   static const String loginPath = '/api/auth/login';
   static const String registerPath = '/api/auth/register';

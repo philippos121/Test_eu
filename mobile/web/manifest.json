@@ -1,0 +1,28 @@
+{
+  "name": "EU-Bagatellverfahren Portal",
+  "short_name": "EU-Klagen",
+  "description": "Geringfügige Forderungen nach VO (EG) 861/2007 — bis EUR 5.000",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#003399",
+  "theme_color": "#003399",
+  "orientation": "portrait",
+  "lang": "de",
+  "categories": ["productivity", "finance"],
+  "icons": [
+    {
+      "src": "icons/Icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/Icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [],
+  "prefer_related_applications": false
+}
