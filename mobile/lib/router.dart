@@ -9,31 +9,47 @@ import 'screens/cases/cases_list_screen.dart';
 import 'screens/cases/case_detail_screen.dart';
 import 'screens/cases/chat_screen.dart';
 import 'screens/documents/documents_screen.dart';
-import 'screens/admin/admin_dashboard_screen.dart';
-import 'screens/admin/nn_dashboard_screen.dart';
-import 'screens/admin/statistics_screen.dart';
+import 'screens/onboarding/welcome_screen.dart';
+import 'screens/onboarding/how_it_works_screen.dart';
+import 'screens/onboarding/agb_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'widgets/main_shell.dart';
 
-final routerProvider = Provider<GoRouter>((ref) {
-  final auth = ref.watch(authProvider);
+// Public routes that do not require authentication
+const _publicPrefixes = ['/', '/how-it-works', '/agb', '/auth'];
 
+final routerProvider = Provider<GoRouter>((ref) {
   return GoRouter(
-    initialLocation: '/cases',
+    initialLocation: '/',
     redirect: (context, state) {
+      final auth = ref.read(authProvider);
       final loggedIn = auth.valueOrNull != null;
-      final onAuth = state.matchedLocation.startsWith('/auth');
-      if (!loggedIn && !onAuth) return '/auth/login';
-      if (loggedIn && onAuth) return '/cases';
+      final loc = state.matchedLocation;
+
+      final isPublic = _publicPrefixes.any(
+        (p) => p == '/' ? loc == '/' : loc.startsWith(p),
+      );
+
+      // Unauthenticated user trying to access a protected route
+      if (!loggedIn && !isPublic) return '/';
+
+      // Authenticated user landing on auth screens → go to cases
+      if (loggedIn && loc.startsWith('/auth')) return '/cases';
+
       return null;
     },
     refreshListenable: _AuthListenable(ref),
     routes: [
-      // Auth routes (no shell)
+      // ── Public / onboarding routes (no shell) ───────────────────────────
+      GoRoute(path: '/', builder: (_, __) => const WelcomeScreen()),
+      GoRoute(path: '/how-it-works', builder: (_, __) => const HowItWorksScreen()),
+      GoRoute(path: '/agb', builder: (_, __) => const AgbScreen()),
+
+      // ── Auth routes (no shell) ───────────────────────────────────────────
       GoRoute(path: '/auth/login', builder: (_, __) => const LoginScreen()),
       GoRoute(path: '/auth/register', builder: (_, __) => const RegisterScreen()),
 
-      // App shell with bottom nav
+      // ── App shell with bottom nav (requires auth) ────────────────────────
       ShellRoute(
         builder: (context, state, child) => MainShell(child: child),
         routes: [
@@ -57,20 +73,6 @@ final routerProvider = Provider<GoRouter>((ref) {
                         DocumentsScreen(caseId: state.pathParameters['caseId']!),
                   ),
                 ],
-              ),
-            ],
-          ),
-          GoRoute(
-            path: '/statistics',
-            builder: (_, __) => const StatisticsScreen(),
-          ),
-          GoRoute(
-            path: '/admin',
-            builder: (_, __) => const AdminDashboardScreen(),
-            routes: [
-              GoRoute(
-                path: 'nn',
-                builder: (_, __) => const NNDashboardScreen(),
               ),
             ],
           ),
