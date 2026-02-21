@@ -35,7 +35,7 @@ class AppTheme {
           ),
           iconTheme: const IconThemeData(color: Colors.white),
         ),
-        cardTheme: CardTheme(
+        cardTheme: CardThemeData(
           elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
@@ -129,7 +129,7 @@ class AppTheme {
             color: Colors.white,
           ),
         ),
-        cardTheme: CardTheme(
+        cardTheme: CardThemeData(
           elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),

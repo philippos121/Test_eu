@@ -77,9 +77,9 @@ class DocumentsScreen extends ConsumerWidget {
         title: const Text('Formular A generieren'),
         content: const Text('Soll das EU-Klageformular A (VO 861/2007) für diesen Fall generiert werden?'),
         actions: [
-          TextButton(onPressed: () => ctx.pop(false), child: const Text('Abbrechen')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Abbrechen')),
           FilledButton(
-            onPressed: () => ctx.pop(true),
+            onPressed: () => Navigator.of(ctx).pop(true),
             style: FilledButton.styleFrom(minimumSize: Size.zero, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
             child: const Text('Generieren'),
           ),

@@ -333,7 +333,7 @@ class _EVContent extends StatelessWidget {
         Text(data['recommendation_reason'] as String? ?? '',
             style: const TextStyle(fontSize: 12, color: Colors.grey)),
         const SizedBox(height: 12),
-        _row('P(Gewinn)', '${((data['p_win'] as num?)?.toDouble() ?? 0) * 100:.0f}%'),
+        _row('P(Gewinn)', '${(((data['p_win'] as num?)?.toDouble() ?? 0) * 100).toStringAsFixed(0)}%'),
         _row('Provision', '${(data['expected_commission'] as num?)?.toDouble()?.toStringAsFixed(2)} EUR'),
         _row('Gerichtskosten', '${(data['court_fees'] as num?)?.toDouble()?.toStringAsFixed(2)} EUR'),
         _row('Anwaltskosten', '${(data['attorney_costs'] as num?)?.toDouble()?.toStringAsFixed(2)} EUR'),
