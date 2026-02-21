@@ -60,10 +60,3 @@ flutter:
   uses-material-design: true
   generate: true
 
-  assets:
-    - assets/icons/
-
-  fonts:
-    - family: Roboto
-      fonts:
-        - asset: packages/google_fonts/fonts/Roboto-Regular.ttf
